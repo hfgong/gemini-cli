@@ -261,7 +261,7 @@ describe('Core System Prompt (prompts.ts)', () => {
     expect(prompt).toContain('Distinguish between **Directives**');
     expect(prompt).toContain('and **Inquiries**');
     expect(prompt).toContain(
-      'Assume all requests are Inquiries unless they contain an explicit instruction to perform a task.',
+      'Assume requests are Directives when they describe a desired outcome, a problem to fix, or a change to make.',
     );
     expect(prompt).toMatchSnapshot();
   });
