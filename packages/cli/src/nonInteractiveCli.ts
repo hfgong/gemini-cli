@@ -288,6 +288,11 @@ export async function runNonInteractive({
 
       let currentMessages: Content[] = [{ role: 'user', parts: query }];
 
+      // Completion gate: track whether tests were run during this session
+      let testsWereRun = false;
+      let verificationRetries = 0;
+      const MAX_VERIFICATION_RETRIES = 2;
+
       let turnCount = 0;
       while (true) {
         turnCount++;
@@ -441,6 +446,28 @@ export async function runNonInteractive({
             }
           }
 
+          // Completion gate: detect test commands in shell tool calls
+          if (!testsWereRun) {
+            for (const tc of completedToolCalls) {
+              const name = tc.request.name;
+              const args = tc.request.args;
+              if (name === 'shell' || name === 'run_shell_command') {
+                const cmd =
+                  typeof args === 'object' && args !== null
+                    ? String(args['command'] ?? '')
+                    : '';
+                if (
+                  /\b(pytest|py\.test|unittest|nose2|tox|npm\s+test|npx\s+jest|jest|mocha|vitest|cargo\s+test|go\s+test|mvn\s+test|gradle\s+test|make\s+test|\.\/manage\.py\s+test)\b/.test(
+                    cmd,
+                  )
+                ) {
+                  testsWereRun = true;
+                  break;
+                }
+              }
+            }
+          }
+
           // Record tool calls with full metadata before sending responses to Gemini
           try {
             const currentModel =
@@ -495,6 +522,41 @@ export async function runNonInteractive({
 
           currentMessages = [{ role: 'user', parts: toolResponseParts }];
         } else {
+          // Completion gate: if verify-before-complete is enabled and no tests
+          // were run, push the agent to run tests before finishing.
+          if (
+            config.isVerifyBeforeCompleteEnabled() &&
+            !testsWereRun &&
+            verificationRetries < MAX_VERIFICATION_RETRIES
+          ) {
+            verificationRetries++;
+            if (config.getOutputFormat() === OutputFormat.TEXT) {
+              process.stderr.write(
+                `[VERIFY] No test execution detected. Asking agent to verify changes (attempt ${verificationRetries}/${MAX_VERIFICATION_RETRIES}).\n`,
+              );
+            }
+            if (streamFormatter) {
+              streamFormatter.emitEvent({
+                type: JsonStreamEventType.MESSAGE,
+                timestamp: new Date().toISOString(),
+                role: 'user',
+                content:
+                  '[Completion Gate] You have not run any tests to verify your changes. Please find and run relevant tests before finishing.',
+              });
+            }
+            currentMessages = [
+              {
+                role: 'user',
+                parts: [
+                  {
+                    text: 'IMPORTANT: You have not run any tests to verify your changes. Before finishing, you MUST find and run relevant tests. Look for test files related to the code you modified (e.g., test_*.py, *_test.py, files in tests/ or test/ directories). Run them and fix any failures. Only then should you consider your task complete.',
+                  },
+                ],
+              },
+            ];
+            continue;
+          }
+
           // Emit final result event for streaming JSON
           if (streamFormatter) {
             const metrics = uiTelemetryService.getMetrics();

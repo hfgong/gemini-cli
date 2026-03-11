@@ -597,6 +597,12 @@ export interface ConfigParameters {
   billing?: {
     overageStrategy?: OverageStrategy;
   };
+  /** Phase 2 flags for test-driven verification */
+  verifyBeforeComplete?: boolean;
+  protectTests?: boolean;
+  reproduceFirst?: boolean;
+  /** Time budget in minutes — surfaced to the agent via system prompt */
+  timeBudgetMinutes?: number;
 }
 
 export class Config implements McpContext {
@@ -796,6 +802,10 @@ export class Config implements McpContext {
   private readonly disableLLMCorrection: boolean;
   private readonly planEnabled: boolean;
   private readonly trackerEnabled: boolean;
+  private readonly verifyBeforeComplete: boolean;
+  private readonly timeBudgetMinutes: number | undefined;
+  private readonly protectTests: boolean;
+  private readonly reproduceFirst: boolean;
   private readonly planModeRoutingEnabled: boolean;
   private readonly modelSteering: boolean;
   private contextManager?: ContextManager;
@@ -887,6 +897,10 @@ export class Config implements McpContext {
     this.disableLLMCorrection = params.disableLLMCorrection ?? true;
     this.planEnabled = params.plan ?? false;
     this.trackerEnabled = params.tracker ?? false;
+    this.verifyBeforeComplete = params.verifyBeforeComplete ?? false;
+    this.protectTests = params.protectTests ?? false;
+    this.reproduceFirst = params.reproduceFirst ?? false;
+    this.timeBudgetMinutes = params.timeBudgetMinutes;
     this.planModeRoutingEnabled = params.planSettings?.modelRouting ?? true;
     this.enableEventDrivenScheduler = params.enableEventDrivenScheduler ?? true;
     this.skillsSupport = params.skillsSupport ?? true;
@@ -2305,6 +2319,22 @@ export class Config implements McpContext {
 
   isTrackerEnabled(): boolean {
     return this.trackerEnabled;
+  }
+
+  isVerifyBeforeCompleteEnabled(): boolean {
+    return this.verifyBeforeComplete;
+  }
+
+  isProtectTestsEnabled(): boolean {
+    return this.protectTests;
+  }
+
+  isReproduceFirstEnabled(): boolean {
+    return this.reproduceFirst;
+  }
+
+  getTimeBudgetMinutes(): number | undefined {
+    return this.timeBudgetMinutes;
   }
 
   getApprovedPlanPath(): string | undefined {

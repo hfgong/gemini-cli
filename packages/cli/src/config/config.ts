@@ -92,6 +92,10 @@ export interface CliArgs {
   startupMessages?: string[];
   rawOutput: boolean | undefined;
   acceptRawOutputRisk: boolean | undefined;
+  verifyBeforeComplete: boolean | undefined;
+  protectTests: boolean | undefined;
+  reproduceFirst: boolean | undefined;
+  timeBudget: number | undefined;
   isCommand: boolean | undefined;
 }
 
@@ -289,6 +293,29 @@ export async function parseArguments(
         .option('accept-raw-output-risk', {
           type: 'boolean',
           description: 'Suppress the security warning when using --raw-output.',
+        })
+        .option('verify-before-complete', {
+          type: 'boolean',
+          description:
+            'Require the agent to run relevant tests and verify changes before declaring task complete.',
+          default: true,
+        })
+        .option('protect-tests', {
+          type: 'boolean',
+          description:
+            'Prefer fixing source code over modifying tests. Tests may still be changed if clearly wrong.',
+          default: true,
+        })
+        .option('reproduce-first', {
+          type: 'boolean',
+          description:
+            'Instruct the agent to write a reproduction script before attempting a fix.',
+          default: true,
+        })
+        .option('time-budget', {
+          type: 'number',
+          description:
+            'Time budget in minutes. The agent will be informed of this deadline to help it plan efficiently.',
         }),
     )
     // Register MCP subcommands
@@ -827,6 +854,10 @@ export async function loadCliConfig(
       };
     },
     enableConseca: settings.security?.enableConseca,
+    verifyBeforeComplete: argv.verifyBeforeComplete,
+    protectTests: argv.protectTests,
+    reproduceFirst: argv.reproduceFirst,
+    timeBudgetMinutes: argv.timeBudget,
   });
 }
 

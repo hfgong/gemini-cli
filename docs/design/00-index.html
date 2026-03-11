@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gemini CLI Improvement — Design Documents</title>
+<style>
+  :root { --bg: #0d1117; --surface: #161b22; --border: #30363d; --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --green: #3fb950; --yellow: #d29922; --red: #f85149; --purple: #bc8cff; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; padding: 2rem; max-width: 1000px; margin: 0 auto; }
+  h1 { font-size: 2rem; color: var(--accent); margin-bottom: 0.5rem; }
+  .subtitle { color: var(--muted); margin-bottom: 2rem; }
+  .phase { margin: 2rem 0; }
+  .phase h2 { font-size: 1.4rem; color: var(--green); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 1rem; }
+  .doc-card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.2rem 1.5rem; margin: 0.8rem 0; display: flex; justify-content: space-between; align-items: center; text-decoration: none; color: var(--text); transition: border-color 0.2s; }
+  .doc-card:hover { border-color: var(--accent); }
+  .doc-card .title { font-weight: 600; font-size: 1.1rem; }
+  .doc-card .desc { color: var(--muted); font-size: 0.9rem; margin-top: 0.3rem; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; }
+  .badge.done { background: #1a3a2a; color: var(--green); }
+  .badge.proposed { background: #2a2a1a; color: var(--yellow); }
+  .badge.future { background: #1a1a2a; color: var(--purple); }
+  .results { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 2rem 0; }
+  .results h3 { color: var(--yellow); margin-bottom: 1rem; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 0.5rem 1rem; text-align: left; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-size: 0.85rem; text-transform: uppercase; }
+</style>
+</head>
+<body>
+
+<h1>Gemini CLI Improvement — Design Documents</h1>
+<p class="subtitle">Systematic improvements to make Gemini CLI more competitive with Claude Code for agentic coding tasks.</p>
+
+<div class="results">
+  <h3>FeatureBench Results (gemini-2.5-pro)</h3>
+  <table>
+    <tr><th>Metric</th><th>Baseline (npm, lite=28)</th><th>Phase 1 Only (lite=28)</th><th>Phase 1+2 (full=141)</th></tr>
+    <tr><td>Patch generation rate</td><td>64% (18/28)</td><td>89% (25/28)</td><td>94% (133/141)</td></tr>
+    <tr><td>Resolved rate</td><td>3.6% (1/28)</td><td>0% (0/28)</td><td>1.5% (2/133)</td></tr>
+    <tr><td>Avg F2P pass rate</td><td>12.0%</td><td>8.8%</td><td>5.2%</td></tr>
+    <tr><td>API crash / timeout failures</td><td>—</td><td>—</td><td>8/141 (6 API + 2 timeout)</td></tr>
+  </table>
+  <p style="color:var(--muted);font-size:0.85rem;margin-top:0.8rem">
+    Phase 1 increases agent effort (more patches) but decreases precision.
+    Full-split run (141 tasks) shows 1.5% resolve rate with 2 resolved tasks (mlflow trace_correlation lv1+lv2).
+    Phase 2 features (verify-before-complete, protect-tests, reproduce-first, time-budget) now default ON.
+    New A/B test in progress (2026-03-10) to measure Phase 2 impact vs. upstream baseline.
+  </p>
+</div>
+
+<div class="phase">
+  <h2>Phase 1: Prompt & Context Tuning <span class="badge done">IMPLEMENTED</span></h2>
+  <p style="color:var(--muted);margin-bottom:1rem">Prompt wording and compression parameter changes. Low-risk, low-effort, limited impact ceiling.</p>
+
+  <a class="doc-card" href="01-prompt-and-context-changes.html">
+    <div>
+      <div class="title">01 — Prompt & Context Changes (A through I)</div>
+      <div class="desc">9 changes to system prompts, compression threshold, and context management. Flip directive/inquiry default, soften confirmations, reduce narration, increase persistence.</div>
+    </div>
+    <span class="badge done">Done</span>
+  </a>
+</div>
+
+<div class="phase">
+  <h2>Phase 2: Structural Agent Improvements <span class="badge done">IMPLEMENTED</span></h2>
+  <p style="color:var(--muted);margin-bottom:1rem">Architecture-level changes to the agent loop and verification strategy. Now defaulted ON in CLI flags.</p>
+
+  <a class="doc-card" href="02-test-driven-verification.html">
+    <div>
+      <div class="title">02 — Test-Driven Verification</div>
+      <div class="desc">Three flag-guarded features: <code>--verify-before-complete</code> (completion gate requiring tests pass), <code>--protect-tests</code> (prefer fixing source over tests), <code>--reproduce-first</code> (write reproduction script before fixing). All default ON.</div>
+    </div>
+    <span class="badge done">Done</span>
+  </a>
+
+  <a class="doc-card" href="#">
+    <div>
+      <div class="title">02b — Time Budget Awareness</div>
+      <div class="desc"><code>--time-budget N</code> flag injects time management guidance into system prompt. FeatureBench wrapper auto-injects from task timeout. Addresses 2/141 timeout failures.</div>
+    </div>
+    <span class="badge done">Done</span>
+  </a>
+
+  <a class="doc-card" href="#">
+    <div>
+      <div class="title">02c — API Crash Retry (FeatureBench wrapper)</div>
+      <div class="desc">Retry logic in <code>gemini_cli_local.py</code>: 3 retries with exponential backoff for zero-token API crashes. Smart detection distinguishes API crashes from real failures. Addresses 6/141 API failures.</div>
+    </div>
+    <span class="badge done">Done</span>
+  </a>
+
+  <a class="doc-card" href="03-smart-context-management.html">
+    <div>
+      <div class="title">03 — Smart Context Management</div>
+      <div class="desc">Surgical context loading: extract only relevant symbols instead of whole files. Two-phase exploration (scan then deep-read). Address Gemini's context fragility.</div>
+    </div>
+    <span class="badge proposed">Proposed</span>
+  </a>
+
+  <a class="doc-card" href="04-structured-exploration.html">
+    <div>
+      <div class="title">04 — Structured Exploration & Backtracking</div>
+      <div class="desc">Multi-hypothesis exploration with explicit backtracking. Failed approach tracking. Prevents the agent from tunneling into wrong solutions.</div>
+    </div>
+    <span class="badge proposed">Proposed</span>
+  </a>
+</div>
+
+<div class="phase">
+  <h2>Phase 3: New Capabilities <span class="badge future">FUTURE</span></h2>
+  <p style="color:var(--muted);margin-bottom:1rem">New tools and agent capabilities. Requires deeper integration work.</p>
+
+  <a class="doc-card" href="#">
+    <div>
+      <div class="title">05 — Semantic Code Search (planned)</div>
+      <div class="desc">AST-aware search beyond grep/glob. Find callers, implementations, type hierarchies. Reduce irrelevant context from text-based search.</div>
+    </div>
+    <span class="badge future">Future</span>
+  </a>
+
+  <a class="doc-card" href="#">
+    <div>
+      <div class="title">06 — Multi-Agent Decomposition (planned)</div>
+      <div class="desc">Break complex tasks into sub-tasks handled by specialized lightweight agents. Keep each agent's context small and focused.</div>
+    </div>
+    <span class="badge future">Future</span>
+  </a>
+</div>
+
+<div class="results">
+  <h3>Competitor Analysis (Trae Agent + Grok CLI)</h3>
+  <table>
+    <tr><th>Idea</th><th>Source</th><th>Design Doc</th><th>Implementation</th></tr>
+    <tr><td>Codebase Knowledge Graph (tree-sitter + SQLite)</td><td>Trae Agent</td><td>03 - Smart Context</td><td>Working reference impl in trae_agent/tools/ckg_tool.py</td></tr>
+    <tr><td>7-step prompt with mandatory reproduce + verify</td><td>Trae Agent</td><td>02 - Test Verification</td><td>Prompt-only; validates our Option A approach</td></tr>
+    <tr><td>Completion gate (reject empty patches)</td><td>Trae Agent</td><td>02 - Test Verification</td><td>Working impl in trae_agent.py:236-244</td></tr>
+    <tr><td>Test file exclusion from patches</td><td>Trae Agent</td><td>02 - Test Verification</td><td>Regex filter on /test/, /tests/, test_</td></tr>
+    <tr><td>Sequential thinking tool (branching, revision)</td><td>Trae Agent</td><td>04 - Exploration</td><td>Tool with thought history + branches</td></tr>
+    <tr><td>Trajectory tagging (semantic step labels)</td><td>Trae Agent</td><td>03 - Smart Context</td><td>LLM-powered tagging in lake_view.py</td></tr>
+    <tr><td>Fuzzy edit matching (structural comparison)</td><td>Grok CLI</td><td>04 - Exploration</td><td>Fallback in text-editor.ts:411-454</td></tr>
+    <tr><td>Morph abbreviated edit format</td><td>Grok CLI</td><td>03 - Smart Context</td><td>"// ... existing code ..." pattern</td></tr>
+  </table>
+</div>
+
+</body>
+</html>

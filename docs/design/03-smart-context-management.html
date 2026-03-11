@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Design Doc 03: Smart Context Management</title>
+<style>
+  :root { --bg: #0d1117; --surface: #161b22; --surface2: #1c2333; --border: #30363d; --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --green: #3fb950; --yellow: #d29922; --red: #f85149; --purple: #bc8cff; --code-bg: #1a1e2a; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; padding: 2rem; max-width: 1000px; margin: 0 auto; }
+  a { color: var(--accent); }
+  h1 { font-size: 2rem; color: var(--accent); margin-bottom: 0.3rem; }
+  h2 { font-size: 1.5rem; margin: 2.5rem 0 1rem; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+  h3 { font-size: 1.2rem; margin: 1.8rem 0 0.8rem; color: var(--green); }
+  h4 { font-size: 1.05rem; margin: 1.2rem 0 0.5rem; color: var(--yellow); }
+  p, li { margin: 0.5rem 0; }
+  ul, ol { padding-left: 1.5rem; }
+  .subtitle { color: var(--muted); margin-bottom: 2rem; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1rem 0; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; overflow-x: auto; font-size: 0.9rem; line-height: 1.5; margin: 1rem 0; }
+  code { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.9em; }
+  .inline-code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; }
+  .badge.high { background: #2a1a1a; color: var(--red); }
+  .badge.medium { background: #2a2a1a; color: var(--yellow); }
+  .badge.low { background: #1a2a1a; color: var(--green); }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+  th, td { padding: 0.5rem 1rem; text-align: left; border-bottom: 1px solid var(--border); font-size: 0.95rem; }
+  th { color: var(--muted); font-size: 0.85rem; text-transform: uppercase; }
+  .ref { font-size: 0.85rem; color: var(--muted); }
+  .ref a { color: var(--purple); }
+  svg { max-width: 100%; height: auto; margin: 1rem 0; }
+  .nav { color: var(--muted); font-size: 0.9rem; margin-bottom: 1.5rem; }
+  .quote { border-left: 3px solid var(--accent); padding-left: 1rem; color: var(--muted); font-style: italic; margin: 1rem 0; }
+</style>
+</head>
+<body>
+
+<div class="nav"><a href="00-index.html">&larr; Back to Index</a></div>
+
+<h1>Design Doc 03: Smart Context Management</h1>
+<p class="subtitle">Address Gemini's context fragility through surgical context loading, observation masking, and repository-aware indexing.<br>
+<span class="badge high">Priority: Critical</span> <span class="badge medium">Risk: Medium</span> <span class="badge medium">Effort: High</span></p>
+
+<h2>1. The Core Problem: Context Fragility</h2>
+
+<div class="quote">
+  "Context is the bottleneck, not intelligence." — Anthropic, Spotify, and JetBrains research teams independently
+</div>
+
+<p>Gemini's reasoning quality degrades predictably as context grows, even within its stated 1M-token window. This is not unique to Gemini — it's a well-documented phenomenon called <strong>"context rot"</strong> (Chroma Research) and the <strong>"Lost in the Middle" effect</strong> (Stanford/Berkeley):</p>
+
+<ul>
+  <li>Performance is highest when relevant info is at the <strong>beginning or end</strong> of context</li>
+  <li>Information in the <strong>middle of long contexts is effectively invisible</strong></li>
+  <li><strong>Multi-hop reasoning</strong> (connecting facts across multiple locations) degrades much faster than simple retrieval</li>
+  <li>Counterintuitively, <strong>shuffled text</strong> performs better than coherent text because coherent text creates stronger positional bias</li>
+</ul>
+
+<p>This explains Gemini's "laziness": the model has learned that loading more context makes it dumber, so it avoids exploration as a self-preservation strategy. Our Phase 1 prompt changes fight this instinct, causing the agent to load more context but reason less accurately.</p>
+
+<p class="ref">References: <a href="https://research.trychroma.com/context-rot">Chroma: Context Rot</a> | <a href="https://arxiv.org/abs/2307.03172">Lost in the Middle (arXiv)</a> | <a href="https://arxiv.org/html/2510.05381v1">Context Length Alone Hurts LLM Performance</a></p>
+
+<h2>2. Industry Solutions Survey</h2>
+
+<table>
+  <tr><th>Technique</th><th>Used By</th><th>Token Savings</th><th>Impact</th></tr>
+  <tr><td><strong>Observation Masking</strong><br><span class="ref">Truncate old tool outputs, keep actions + reasoning</span></td><td>OpenHands, Cursor, Warp</td><td>~50% cost reduction</td><td>+2.6% solve rate (Qwen3-Coder)</td></tr>
+  <tr><td><strong>Repo Map (PageRank)</strong><br><span class="ref">AST-parsed signatures ranked by reference count</span></td><td>Aider</td><td>Show signatures, not full files</td><td>Enables whole-repo awareness</td></tr>
+  <tr><td><strong>AST-Based Chunking</strong><br><span class="ref">Tree-sitter chunks by function/class boundaries</span></td><td>cAST, Aider, Supermemory</td><td>Coherent chunks</td><td>+4.3pt Recall@5, +2.67pt Pass@1</td></tr>
+  <tr><td><strong>SWE-Pruner</strong><br><span class="ref">Line-level task-aware pruning of source files</span></td><td>Research</td><td>23-54% tokens</td><td>-26% interaction rounds</td></tr>
+  <tr><td><strong>Auto-Compaction</strong><br><span class="ref">LLM summarizes history at capacity threshold</span></td><td>Claude Code, OpenHands</td><td>Extends sessions indefinitely</td><td>Maintains quality at scale</td></tr>
+  <tr><td><strong>Sub-Agent Isolation</strong><br><span class="ref">Deep exploration in sub-agents, summary returned</span></td><td>Claude Code, MASAI</td><td>Clean orchestrator context</td><td>28-80% SWE-bench</td></tr>
+  <tr><td><strong>Vector Search RAG</strong><br><span class="ref">Embed code chunks, retrieve by semantic similarity</span></td><td>Cursor</td><td>Load only relevant chunks</td><td>Semantic retrieval</td></tr>
+</table>
+
+<h2>3. Proposed Changes for Gemini CLI</h2>
+
+<h3>3.1 Observation Masking (Low effort, high impact)</h3>
+
+<div class="card">
+  <h4>What</h4>
+  <p>After each turn, truncate tool output observations older than N turns while preserving the full action/reasoning history. JetBrains research (NeurIPS 2025) showed this <strong>matches or beats LLM summarization</strong> while being simpler and cheaper.</p>
+
+  <h4>Why it works for Gemini specifically</h4>
+  <p>A typical SWE agent's context is ~80% tool output (file contents, command results) and ~20% reasoning. Masking old outputs cuts context by ~50% without removing any of the agent's reasoning chain. Since Gemini's reasoning degrades with context size, this directly addresses the root cause.</p>
+
+  <h4>Implementation</h4>
+  <pre><code>// In chatCompressionService.ts or a new observationMasker.ts
+
+interface ObservationMaskingConfig {
+  // Keep full output for the last N turns
+  recentWindowSize: number;  // default: 10
+  // For older turns, replace output with a summary placeholder
+  summaryTemplate: string;   // e.g., "[Read {filename}: {lineCount} lines]"
+  // Never mask outputs smaller than this
+  minSizeToMask: number;     // default: 500 chars
+}
+
+function maskOldObservations(
+  history: ChatMessage[],
+  config: ObservationMaskingConfig
+): ChatMessage[] {
+  const recentCutoff = history.length - config.recentWindowSize;
+
+  return history.map((msg, i) => {
+    if (i >= recentCutoff) return msg;  // Keep recent turns intact
+    if (msg.role !== 'tool') return msg; // Keep user/assistant messages
+
+    const output = msg.content;
+    if (output.length < config.minSizeToMask) return msg;
+
+    // Replace with compact placeholder
+    return {
+      ...msg,
+      content: generatePlaceholder(msg),
+      _originalLength: output.length,
+    };
+  });
+}</code></pre>
+
+  <h4>Affected files</h4>
+  <ul>
+    <li><code class="inline-code">packages/core/src/services/chatCompressionService.ts</code> — Add masking before compression</li>
+    <li><code class="inline-code">packages/core/src/agents/local-executor.ts</code> — Apply masking in turn loop</li>
+  </ul>
+</div>
+
+<p class="ref">Reference: <a href="https://blog.jetbrains.com/research/2025/12/efficient-context-management/">JetBrains: "The Complexity Trap"</a> | <a href="https://arxiv.org/abs/2508.21433">Paper</a></p>
+
+<h3>3.2 Repository Map via Tree-Sitter (Medium effort, high impact)</h3>
+
+<div class="card">
+  <h4>What</h4>
+  <p>Aider's most innovative feature: parse the entire codebase with tree-sitter, extract all function/class/method signatures, build a dependency graph, run PageRank to identify the most-referenced symbols, and include only the top-ranked signatures in context. The LLM gets a "table of contents" of the entire repo without loading full file contents.</p>
+
+  <h4>Why it works for Gemini specifically</h4>
+  <p>Instead of Gemini blindly reading whole files (which bloats context), the repo map gives it a navigational overview. The agent can then surgically request only the specific functions it needs. This turns Gemini's large context window into an advantage — it can hold a broad repo map plus a few deep-dived functions, rather than a few random full files.</p>
+
+  <h4>Design</h4>
+  <svg viewBox="0 0 800 200" xmlns="http://www.w3.org/2000/svg">
+    <defs><marker id="a2" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/></marker></defs>
+    <rect x="5" y="5" width="790" height="190" rx="8" fill="#161b22" stroke="#30363d"/>
+
+    <rect x="20" y="30" width="120" height="50" rx="4" fill="#1c2333" stroke="#30363d"/>
+    <text x="80" y="50" fill="#e6edf3" font-size="11" text-anchor="middle">Source Files</text>
+    <text x="80" y="65" fill="#8b949e" font-size="10" text-anchor="middle">*.py, *.ts, *.rs</text>
+
+    <line x1="140" y1="55" x2="180" y2="55" stroke="#58a6ff" marker-end="url(#a2)"/>
+
+    <rect x="180" y="30" width="130" height="50" rx="4" fill="#1c2333" stroke="#3fb950"/>
+    <text x="245" y="50" fill="#3fb950" font-size="11" text-anchor="middle">Tree-Sitter Parse</text>
+    <text x="245" y="65" fill="#8b949e" font-size="10" text-anchor="middle">Extract definitions</text>
+
+    <line x1="310" y1="55" x2="350" y2="55" stroke="#58a6ff" marker-end="url(#a2)"/>
+
+    <rect x="350" y="30" width="130" height="50" rx="4" fill="#1c2333" stroke="#d29922"/>
+    <text x="415" y="50" fill="#d29922" font-size="11" text-anchor="middle">Dependency Graph</text>
+    <text x="415" y="65" fill="#8b949e" font-size="10" text-anchor="middle">+ PageRank</text>
+
+    <line x1="480" y1="55" x2="520" y2="55" stroke="#58a6ff" marker-end="url(#a2)"/>
+
+    <rect x="520" y="30" width="130" height="50" rx="4" fill="#1c2333" stroke="#bc8cff"/>
+    <text x="585" y="50" fill="#bc8cff" font-size="11" text-anchor="middle">Repo Map</text>
+    <text x="585" y="65" fill="#8b949e" font-size="10" text-anchor="middle">Top-K signatures</text>
+
+    <line x1="650" y1="55" x2="690" y2="55" stroke="#58a6ff" marker-end="url(#a2)"/>
+
+    <rect x="690" y="30" width="90" height="50" rx="4" fill="#1a2a1a" stroke="#3fb950"/>
+    <text x="735" y="50" fill="#3fb950" font-size="11" text-anchor="middle">System</text>
+    <text x="735" y="65" fill="#3fb950" font-size="10" text-anchor="middle">Prompt</text>
+
+    <!-- Example output -->
+    <rect x="20" y="100" width="760" height="80" rx="4" fill="#1a1e2a" stroke="#30363d"/>
+    <text x="30" y="118" fill="#8b949e" font-size="10" font-family="monospace">Example repo map output (fits in ~2K tokens for a 50-file project):</text>
+    <text x="30" y="135" fill="#3fb950" font-size="10" font-family="monospace">src/models/user.py: class User(BaseModel) | def validate_email(email: str) -> bool | def to_dict() -> dict</text>
+    <text x="30" y="150" fill="#3fb950" font-size="10" font-family="monospace">src/services/auth.py: class AuthService | def login(email, password) -> Token | def refresh(token) -> Token</text>
+    <text x="30" y="165" fill="#3fb950" font-size="10" font-family="monospace">src/api/routes.py: def register_routes(app) | @app.post("/login") | @app.get("/users/{id}")</text>
+  </svg>
+
+  <h4>Implementation approach</h4>
+  <p>Gemini CLI already has a codebase investigator sub-agent. We can enhance it with tree-sitter:</p>
+  <ol>
+    <li>Add <code class="inline-code">web-tree-sitter</code> as a dependency (works in Node.js)</li>
+    <li>On first tool call, parse all source files in the project root</li>
+    <li>Build a signature index: <code class="inline-code">Map&lt;filePath, Definition[]&gt;</code></li>
+    <li>Inject the top-ranked signatures into the system prompt (refreshed on file changes)</li>
+    <li>Cache the index; re-parse only changed files (use file mtime)</li>
+  </ol>
+
+  <h4>Affected files</h4>
+  <ul>
+    <li><code class="inline-code">packages/core/src/agents/codebase-investigator.ts</code> — Enhance with tree-sitter</li>
+    <li><code class="inline-code">packages/core/src/services/repoMapService.ts</code> — New: build and maintain repo map</li>
+    <li><code class="inline-code">packages/core/src/prompts/snippets.ts</code> — Inject repo map into system prompt</li>
+  </ul>
+</div>
+
+<p class="ref">Reference: <a href="https://aider.chat/docs/repomap.html">Aider: Repository Map</a> | <a href="https://aider.chat/2023/10/22/repomap.html">Building a better repository map with tree-sitter</a></p>
+
+<h3>3.3 Hierarchical File Localization (Medium effort, high impact)</h3>
+
+<div class="card">
+  <h4>What</h4>
+  <p>Inspired by Agentless (41.2% SWE-bench Verified at $0.70/issue) and LocAgent (92.7% file accuracy): before the agent starts coding, run a lightweight localization phase that narrows from "entire repo" to "specific functions to edit."</p>
+
+  <h4>Three-phase funnel</h4>
+  <ol>
+    <li><strong>File-level:</strong> Show repo structure + repo map to LLM, ask "which 5 files are most relevant?"</li>
+    <li><strong>Symbol-level:</strong> For each candidate file, show only the skeleton (class/function declarations). Ask "which functions need modification?"</li>
+    <li><strong>Context loading:</strong> Load only the identified functions (plus immediate dependencies) into context</li>
+  </ol>
+
+  <p>This is what the existing <code class="inline-code">codebase-investigator</code> sub-agent partially does, but it loads full files and returns verbose traces. The improvement is to make it return <strong>only function-level pointers</strong>, and load context surgically.</p>
+
+  <h4>Affected files</h4>
+  <ul>
+    <li><code class="inline-code">packages/core/src/agents/codebase-investigator.ts</code> — Add skeleton-based narrowing</li>
+    <li><code class="inline-code">packages/core/src/tools/read-file.ts</code> — Add function-extraction mode (read only a specific function by name)</li>
+  </ul>
+</div>
+
+<p class="ref">Reference: <a href="https://arxiv.org/abs/2407.01489">Agentless Paper</a> | <a href="https://arxiv.org/html/2503.09089v1">LocAgent: Graph-Guided Localization</a></p>
+
+<h3>3.4 Enhanced Compression with Observation Awareness (Low effort)</h3>
+
+<div class="card">
+  <h4>What</h4>
+  <p>Our Phase 1 Change I added <code class="inline-code">&lt;failed_approaches&gt;</code> tracking to the compression prompt. Extend this with observation-aware compression:</p>
+  <ul>
+    <li>When compressing, <strong>always preserve</strong>: tool call names + arguments, error messages, file paths mentioned</li>
+    <li><strong>Always discard</strong>: full file contents (replace with "[Read src/foo.py: 200 lines, contains class Foo, Bar]"), verbose command output, duplicate information</li>
+    <li><strong>Preserve the 5 most recently accessed files</strong> in full (Claude Code's approach)</li>
+  </ul>
+
+  <h4>Affected files</h4>
+  <ul>
+    <li><code class="inline-code">packages/core/src/services/chatCompressionService.ts</code> — Structured compression rules</li>
+    <li><code class="inline-code">packages/core/src/prompts/snippets.ts</code> — Enhanced compression prompt</li>
+  </ul>
+</div>
+
+<h2>4. Prioritized Implementation Plan</h2>
+
+<table>
+  <tr><th>#</th><th>Change</th><th>Effort</th><th>Expected Impact</th><th>Dependencies</th></tr>
+  <tr><td>1</td><td>Observation Masking</td><td><span class="badge low">Low</span></td><td>~50% context reduction, +2-5% accuracy</td><td>None</td></tr>
+  <tr><td>2</td><td>Enhanced Compression</td><td><span class="badge low">Low</span></td><td>Better quality after compression</td><td>None</td></tr>
+  <tr><td>3</td><td>Repository Map</td><td><span class="badge medium">Medium</span></td><td>Whole-repo awareness without context bloat</td><td>tree-sitter dependency</td></tr>
+  <tr><td>4</td><td>Hierarchical Localization</td><td><span class="badge medium">Medium</span></td><td>Surgical context loading</td><td>Repo Map (#3)</td></tr>
+</table>
+
+<h2>5. Risk Assessment</h2>
+
+<table>
+  <tr><th>Risk</th><th>Severity</th><th>Mitigation</th></tr>
+  <tr>
+    <td>Observation masking removes info the agent needs later</td>
+    <td><span class="badge medium">Medium</span></td>
+    <td>Keep recent window of 10 turns; agent can re-read files if needed. JetBrains showed this is robust.</td>
+  </tr>
+  <tr>
+    <td>Tree-sitter parsing is slow on large repos</td>
+    <td><span class="badge low">Low</span></td>
+    <td>Cache results, parse incrementally. Aider handles repos with 1000+ files this way.</td>
+  </tr>
+  <tr>
+    <td>Repo map grows too large for system prompt</td>
+    <td><span class="badge low">Low</span></td>
+    <td>PageRank ranking + token budget cap. Only include top-ranked symbols that fit.</td>
+  </tr>
+  <tr>
+    <td>Hierarchical localization misses the right file</td>
+    <td><span class="badge medium">Medium</span></td>
+    <td>Agentless achieves 41% with this approach. Combine with embedding-based fallback. Let agent override with manual search.</td>
+  </tr>
+</table>
+
+<h2>6. Gemini-Specific Considerations</h2>
+
+<div class="card">
+  <p>Gemini has a genuine 1M-token context window, which is larger than Claude's 200K. This creates a unique opportunity:</p>
+  <ul>
+    <li><strong>Repo map can be larger</strong> — Include more signatures than Aider/Claude can fit</li>
+    <li><strong>But don't fill it</strong> — The "Lost in the Middle" effect means quality peaks around 50-100K tokens of relevant content, not 1M of everything</li>
+    <li><strong>Use the space for structure, not content</strong> — A comprehensive repo map + targeted function reads is better than dumping whole files</li>
+    <li><strong>Observation masking is extra important</strong> — Without it, Gemini's context fills with stale tool output, leaving less room for the repo map and active work</li>
+  </ul>
+</div>
+
+<h2>7. Competitor Analysis: How Other CLIs Handle Context</h2>
+
+<div class="card">
+  <h4>Trae Agent — Codebase Knowledge Graph (CKG)</h4>
+  <p>Trae has a working implementation of what we're proposing in 3.2 (repo map). Their <code class="inline-code">ckg_tool.py</code> uses tree-sitter + SQLite:</p>
+  <ul>
+    <li>Parses Python, Java, C/C++, TypeScript, JavaScript using tree-sitter</li>
+    <li>Indexes into SQLite: functions, classes, methods with line numbers and parent relationships</li>
+    <li>Exposes three search commands: <code class="inline-code">search_function</code>, <code class="inline-code">search_class</code>, <code class="inline-code">search_class_method</code></li>
+    <li>Returns actual function bodies, not just signatures</li>
+    <li>Persistent across calls — state maintained in memory, no re-parsing</li>
+  </ul>
+  <p>Key difference from Aider's repo map: Trae's CKG is a <strong>tool the agent queries</strong> (pull model), while Aider's repo map is <strong>injected into the system prompt</strong> (push model). The pull model is more context-efficient — the agent only loads what it needs — but requires the model to know when and how to search.</p>
+</div>
+
+<div class="card">
+  <h4>Trae Agent — Lakeview Trajectory Summarization</h4>
+  <p>Trae's <code class="inline-code">lake_view.py</code> provides trajectory-aware context management. Each agent step is tagged semantically (WRITE_TEST, VERIFY_TEST, EXAMINE_CODE, WRITE_FIX, etc.) and summarized by an LLM. This serves two purposes:</p>
+  <ul>
+    <li><strong>Monitoring</strong>: Human observers can see what the agent is doing at a glance</li>
+    <li><strong>Context compression</strong>: The tagged summaries could replace raw history in the context window (though Trae doesn't currently use them this way)</li>
+  </ul>
+  <p>The semantic tagging is the novel part — rather than generic "summarize the last N turns," the tags create a structured activity log that's both human-readable and machine-parseable. This could improve our compression prompt (3.4) by making compression tag-aware.</p>
+</div>
+
+<div class="card">
+  <h4>Grok CLI — Fuzzy File Search + Smart Truncation</h4>
+  <p>Grok's search tool (<code class="inline-code">search.ts</code>) has two ideas worth borrowing:</p>
+  <ul>
+    <li><strong>Fuzzy file matching</strong>: Scores results by exact match (100), substring (80), path match (60), fuzzy (10-40). This helps the model find files even when it doesn't know the exact name — a common problem for Gemini which often guesses wrong file paths.</li>
+    <li><strong>Smart truncation in view_file</strong>: Files >N lines show only the first 10 lines + "... +N more lines" indicator. The agent must explicitly request ranges. This is a lightweight version of SWE-agent's ACI window concept (Design Doc 04, section 4).</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h4>Grok CLI — Morph Fast Apply (Abbreviated Edits)</h4>
+  <p>Grok optionally integrates with Morph API for code editing at 4,500+ tokens/sec. The interesting idea is the <strong>abbreviated edit format</strong>:</p>
+  <pre><code>// Instead of sending full file content for replacement:
+function processUser(user) {
+  // ... existing code ...
+  user.name = sanitize(user.name);  // NEW: sanitize input
+  // ... existing code ...
+}</code></pre>
+  <p>The <code class="inline-code">// ... existing code ...</code> comments let the model express edits without reproducing the entire file. A separate, faster model expands these into full edits. This is context-efficient — the LLM only generates the changed lines. For Gemini, where output token cost is high and context is precious, this pattern could significantly reduce both cost and context usage.</p>
+</div>
+
+<h2>8. Deeper Analysis: The Context Management Hierarchy</h2>
+
+<div class="card">
+  <h4>Why "More Context" Doesn't Mean "Better Context"</h4>
+  <p>Our Phase 1 results proved this empirically: pushing Gemini to explore more (+25% patch rate) <strong>degraded accuracy</strong> (-3.2% F2P). The fundamental insight is that context management operates on three orthogonal axes:</p>
+  <ol>
+    <li><strong>Volume</strong> — How many tokens are in context (reduce this)</li>
+    <li><strong>Relevance</strong> — What fraction of context tokens are useful for the current decision (increase this)</li>
+    <li><strong>Placement</strong> — Where in the context window are the important tokens (beginning and end, not middle)</li>
+  </ol>
+  <p>Most solutions focus on axis 1 (reduce volume). The breakthrough solutions — repo maps, CKG, hierarchical localization — focus on axis 2 (increase relevance). Almost nobody addresses axis 3, but it matters enormously for Gemini due to "Lost in the Middle."</p>
+</div>
+
+<div class="card">
+  <h4>Push vs Pull: Two Philosophies of Context Loading</h4>
+  <p>The competitor analysis reveals two fundamentally different approaches:</p>
+  <table>
+    <tr><th></th><th>Push Model</th><th>Pull Model</th></tr>
+    <tr><td><strong>How</strong></td><td>Pre-load info into system prompt / context</td><td>Agent queries tools to fetch what it needs</td></tr>
+    <tr><td><strong>Examples</strong></td><td>Aider repo map, Cursor embeddings, our compression summaries</td><td>Trae CKG, Gemini codebase-investigator, grep/glob tools</td></tr>
+    <tr><td><strong>Pros</strong></td><td>Agent always has the info; no risk of forgetting to search</td><td>Only loads what's needed; context-efficient</td></tr>
+    <tr><td><strong>Cons</strong></td><td>Wastes context on info that may not be needed</td><td>Agent must know to search; Gemini is lazy about searching</td></tr>
+  </table>
+  <p><strong>The optimal solution for Gemini is a hybrid</strong>: push a lightweight repo map (structure/navigation) and pull detailed content (function bodies) on demand. The pushed map is small enough to not degrade reasoning, but provides enough scaffolding that the agent knows <em>what</em> to pull.</p>
+</div>
+
+<div class="card">
+  <h4>The Real Bottleneck: Not Context Size, but Information Density</h4>
+  <p>Consider two scenarios with the same token count (50K):</p>
+  <ul>
+    <li><strong>Scenario A</strong>: 50K tokens = 3 full files (2000 lines each, lots of boilerplate, imports, docstrings)</li>
+    <li><strong>Scenario B</strong>: 50K tokens = repo map (2K) + 10 targeted function extracts (3K each) + test output (5K) + reasoning history (13K)</li>
+  </ul>
+  <p>Scenario B has 10x higher information density — every token serves a purpose. This is why Agentless achieves 41% on SWE-bench at $0.70/issue: it doesn't load more context, it loads <em>better</em> context through hierarchical localization.</p>
+  <p>For Gemini specifically, high-density context also mitigates the "Lost in the Middle" effect. When every token matters, there's less filler for important information to get lost in.</p>
+</div>
+
+<div class="card">
+  <h4>Observation Masking: A Counter-Intuitive Win</h4>
+  <p>The JetBrains finding that simple truncation beats LLM summarization seems counter-intuitive — shouldn't a summary preserve more information? The explanation lies in how LLMs use context:</p>
+  <ul>
+    <li>LLMs don't need to "remember" old tool outputs — they've already acted on them</li>
+    <li>The <strong>actions themselves</strong> (what tool was called, what file was read, what command was run) encode more useful information than the outputs</li>
+    <li>LLM-generated summaries are <strong>lossy in unpredictable ways</strong> — they may drop the one detail that matters later</li>
+    <li>Simple truncation with a placeholder ("[Read src/foo.py: 200 lines]") preserves the <strong>fact that the file was read</strong> without the content, which is usually enough</li>
+  </ul>
+  <p>The deeper principle: <strong>preserve the narrative arc (what was tried and why) but discard the raw data (tool outputs)</strong>. This is essentially what experienced developers do when explaining a debugging session — they describe the steps, not the log contents.</p>
+</div>
+
+<div class="nav" style="margin-top:3rem"><a href="02-test-driven-verification.html">&larr; Previous: Test-Driven Verification</a> | <a href="00-index.html">Index</a> | <a href="04-structured-exploration.html">Next: Structured Exploration &rarr;</a></div>
+</body>
+</html>

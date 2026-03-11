@@ -88,8 +88,13 @@ export const CodebaseInvestigatorAgent = (
       schema: CodebaseInvestigationReportSchema,
     },
 
-    // The 'output' parameter is now strongly typed as CodebaseInvestigationReportSchema
-    processOutput: (output) => JSON.stringify(output, null, 2),
+    // Strip ExplorationTrace to reduce context footprint in main agent.
+    // The trace is useful for debugging but bloats the main context window.
+    // SummaryOfFindings and RelevantLocations contain all actionable data.
+    processOutput: (output) => {
+      const { ExplorationTrace: _, ...actionableData } = output;
+      return JSON.stringify(actionableData, null, 2);
+    },
 
     modelConfig: {
       model,

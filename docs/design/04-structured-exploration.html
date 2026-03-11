@@ -1,0 +1,466 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Design Doc 04: Structured Exploration & Backtracking</title>
+<style>
+  :root { --bg: #0d1117; --surface: #161b22; --surface2: #1c2333; --border: #30363d; --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --green: #3fb950; --yellow: #d29922; --red: #f85149; --purple: #bc8cff; --code-bg: #1a1e2a; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; padding: 2rem; max-width: 1000px; margin: 0 auto; }
+  a { color: var(--accent); }
+  h1 { font-size: 2rem; color: var(--accent); margin-bottom: 0.3rem; }
+  h2 { font-size: 1.5rem; margin: 2.5rem 0 1rem; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+  h3 { font-size: 1.2rem; margin: 1.8rem 0 0.8rem; color: var(--green); }
+  h4 { font-size: 1.05rem; margin: 1.2rem 0 0.5rem; color: var(--yellow); }
+  p, li { margin: 0.5rem 0; }
+  ul, ol { padding-left: 1.5rem; }
+  .subtitle { color: var(--muted); margin-bottom: 2rem; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1rem 0; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; overflow-x: auto; font-size: 0.9rem; line-height: 1.5; margin: 1rem 0; }
+  code { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.9em; }
+  .inline-code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; }
+  .badge.high { background: #2a1a1a; color: var(--red); }
+  .badge.medium { background: #2a2a1a; color: var(--yellow); }
+  .badge.low { background: #1a2a1a; color: var(--green); }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+  th, td { padding: 0.5rem 1rem; text-align: left; border-bottom: 1px solid var(--border); font-size: 0.95rem; }
+  th { color: var(--muted); font-size: 0.85rem; text-transform: uppercase; }
+  .ref { font-size: 0.85rem; color: var(--muted); }
+  .ref a { color: var(--purple); }
+  svg { max-width: 100%; height: auto; margin: 1rem 0; }
+  .nav { color: var(--muted); font-size: 0.9rem; margin-bottom: 1.5rem; }
+  .quote { border-left: 3px solid var(--accent); padding-left: 1rem; color: var(--muted); font-style: italic; margin: 1rem 0; }
+  .vs-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 768px) { .vs-grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+
+<div class="nav"><a href="00-index.html">&larr; Back to Index</a></div>
+
+<h1>Design Doc 04: Structured Exploration & Backtracking</h1>
+<p class="subtitle">Multi-hypothesis exploration with explicit state management and recovery from wrong directions.<br>
+<span class="badge medium">Priority: High</span> <span class="badge high">Risk: High</span> <span class="badge high">Effort: High</span></p>
+
+<h2>1. The Problem: Tunnel Vision</h2>
+
+<p>When Gemini encounters a complex task, it tends to commit to its first hypothesis and tunnel deeper — even when that hypothesis is wrong. It lacks the ability to:</p>
+
+<ul>
+  <li><strong>Recognize</strong> when it's going in the wrong direction</li>
+  <li><strong>Backtrack</strong> cleanly to a known-good state</li>
+  <li><strong>Try alternative approaches</strong> without accumulated context pollution from failed attempts</li>
+</ul>
+
+<p>This is especially damaging in SWE-bench/FeatureBench tasks where the first approach is often wrong — the agent needs to explore the codebase, form hypotheses, test them, and pivot.</p>
+
+<h2>2. Industry Approaches</h2>
+
+<div class="vs-grid">
+  <div class="card">
+    <h4>Linear Agent (Current)</h4>
+    <p>Single trajectory. If the approach fails, the agent tries to fix it in-place, accumulating error context.</p>
+    <p>Used by: Current Gemini CLI, basic ReAct agents</p>
+    <p style="color:var(--red)">Problem: Context pollution from failed attempts degrades subsequent reasoning</p>
+  </div>
+  <div class="card">
+    <h4>SWE-agent ACI</h4>
+    <p>Constrains agent to a 100-line viewing window with scroll/search navigation. Linter gates syntactically incorrect edits. <code class="inline-code">undo_edit</code> enables reversal.</p>
+    <p>Used by: SWE-agent (~37% SWE-bench)</p>
+    <p style="color:var(--green)">Insight: Constraints help — preventing the agent from seeing too much at once improves focus</p>
+  </div>
+  <div class="card">
+    <h4>Tree Search (CodeTree / SWE-Search)</h4>
+    <p>MCTS over solution paths. Git commits as state snapshots. A critic/value agent scores each branch. Can explore multiple approaches in parallel.</p>
+    <p>Used by: CodeTree (Salesforce), SWE-Search</p>
+    <p style="color:var(--green)">Result: +23% relative improvement over linear agents. Weaker models with tree search nearly match stronger models without it.</p>
+  </div>
+  <div class="card">
+    <h4>EnCompass (MIT)</h4>
+    <p>Clones program runtime at annotated "branchpoints." Explores paths in parallel via MCTS or beam search. Automatic backtracking on failure.</p>
+    <p>Used by: Research (NeurIPS 2025)</p>
+    <p style="color:var(--green)">Result: +15-40% accuracy improvement at 16x LLM call budget. 82% less code than hand-implemented search.</p>
+  </div>
+  <div class="card">
+    <h4>Agentless Multi-Patch</h4>
+    <p>Generate N candidate patches independently (no agent loop). Use test execution to select the best one. No backtracking needed because each attempt starts fresh.</p>
+    <p>Used by: Agentless (41% SWE-bench at $0.70)</p>
+    <p style="color:var(--green)">Insight: Sometimes the cheapest backtracking is "don't track — just restart"</p>
+  </div>
+  <div class="card">
+    <h4>Context-Window Reset</h4>
+    <p>When a strategy fails, start a completely fresh context window with zero traces of the failed attempt. The next strategy starts clean.</p>
+    <p>Used by: Various agents</p>
+    <p style="color:var(--green)">Insight: For Gemini's context fragility, a fresh start may outperform carrying forward error context</p>
+  </div>
+</div>
+
+<p class="ref">References: <a href="https://arxiv.org/abs/2411.04329">CodeTree</a> | <a href="https://arxiv.org/html/2410.20285v1">SWE-Search</a> | <a href="https://news.mit.edu/2026/helping-ai-agents-search-to-get-best-results-from-llms-0205">EnCompass (MIT)</a> | <a href="https://swe-agent.com/0.7/background/aci/">SWE-agent ACI</a></p>
+
+<h2>3. Proposed Design: Git-Based Checkpointing</h2>
+
+<p>The most practical approach for Gemini CLI, balancing impact with implementation complexity:</p>
+
+<h3>3.1 Core Mechanism: Checkpoint & Rollback</h3>
+
+<div class="card">
+  <p>Use git as the state management layer. Before the agent starts a new approach, create a checkpoint (commit). If the approach fails (tests don't pass after N attempts), roll back to the checkpoint and try a different approach with a fresh context summary.</p>
+
+  <pre><code>// New: packages/core/src/agents/checkpoint-manager.ts
+
+class CheckpointManager {
+  private checkpoints: Map&lt;string, string&gt; = new Map(); // name -> commitSha
+
+  async createCheckpoint(name: string, workdir: string): Promise&lt;string&gt; {
+    // Stage all changes and create a checkpoint commit
+    await exec('git add -A', { cwd: workdir });
+    await exec(`git commit -m "checkpoint: ${name}" --allow-empty`, { cwd: workdir });
+    const sha = await exec('git rev-parse HEAD', { cwd: workdir });
+    this.checkpoints.set(name, sha.trim());
+    return sha.trim();
+  }
+
+  async rollback(name: string, workdir: string): Promise&lt;void&gt; {
+    const sha = this.checkpoints.get(name);
+    if (!sha) throw new Error(`No checkpoint: ${name}`);
+    await exec(`git reset --hard ${sha}`, { cwd: workdir });
+  }
+
+  async listCheckpoints(): Promise&lt;string[]&gt; {
+    return [...this.checkpoints.keys()];
+  }
+}</code></pre>
+</div>
+
+<h3>3.2 Integration with Agent Loop</h3>
+
+<svg viewBox="0 0 800 350" xmlns="http://www.w3.org/2000/svg">
+  <defs><marker id="a3" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/></marker></defs>
+  <rect x="5" y="5" width="790" height="340" rx="8" fill="#161b22" stroke="#30363d"/>
+  <text x="400" y="30" fill="#8b949e" font-size="13" text-anchor="middle">Agent Loop with Checkpointing</text>
+
+  <!-- Phase 1: Understand -->
+  <rect x="20" y="50" width="160" height="40" rx="4" fill="#1c2333" stroke="#58a6ff"/>
+  <text x="100" y="75" fill="#58a6ff" font-size="12" text-anchor="middle">1. Understand task</text>
+
+  <line x1="180" y1="70" x2="210" y2="70" stroke="#58a6ff" marker-end="url(#a3)"/>
+
+  <!-- Phase 2: Localize -->
+  <rect x="210" y="50" width="160" height="40" rx="4" fill="#1c2333" stroke="#3fb950"/>
+  <text x="290" y="75" fill="#3fb950" font-size="12" text-anchor="middle">2. Localize (repo map)</text>
+
+  <line x1="370" y1="70" x2="400" y2="70" stroke="#58a6ff" marker-end="url(#a3)"/>
+
+  <!-- Phase 3: Checkpoint -->
+  <rect x="400" y="50" width="160" height="40" rx="4" fill="#2a2a1a" stroke="#d29922"/>
+  <text x="480" y="75" fill="#d29922" font-size="12" text-anchor="middle">3. CHECKPOINT</text>
+
+  <line x1="480" y1="90" x2="480" y2="120" stroke="#58a6ff" marker-end="url(#a3)"/>
+
+  <!-- Attempt box -->
+  <rect x="80" y="120" width="640" height="200" rx="6" fill="#0d1117" stroke="#30363d" stroke-dasharray="5,5"/>
+  <text x="400" y="145" fill="#8b949e" font-size="12" text-anchor="middle">Attempt Loop (max 3 attempts)</text>
+
+  <!-- Code -->
+  <rect x="100" y="160" width="130" height="35" rx="4" fill="#1c2333" stroke="#30363d"/>
+  <text x="165" y="182" fill="#e6edf3" font-size="11" text-anchor="middle">4. Write code</text>
+  <line x1="230" y1="177" x2="260" y2="177" stroke="#58a6ff" marker-end="url(#a3)"/>
+
+  <!-- Test -->
+  <rect x="260" y="160" width="130" height="35" rx="4" fill="#1c2333" stroke="#3fb950"/>
+  <text x="325" y="182" fill="#3fb950" font-size="11" text-anchor="middle">5. Run tests</text>
+  <line x1="390" y1="177" x2="420" y2="177" stroke="#58a6ff" marker-end="url(#a3)"/>
+
+  <!-- Decision -->
+  <rect x="420" y="160" width="100" height="35" rx="4" fill="#1c2333" stroke="#30363d"/>
+  <text x="470" y="182" fill="#e6edf3" font-size="11" text-anchor="middle">Pass?</text>
+
+  <!-- Yes -->
+  <line x1="520" y1="177" x2="570" y2="177" stroke="#3fb950" marker-end="url(#a3)"/>
+  <text x="545" y="170" fill="#3fb950" font-size="10">yes</text>
+  <rect x="570" y="160" width="130" height="35" rx="4" fill="#1a2a1a" stroke="#3fb950"/>
+  <text x="635" y="182" fill="#3fb950" font-size="11" text-anchor="middle">complete_task()</text>
+
+  <!-- No - attempt fix -->
+  <line x1="470" y1="195" x2="470" y2="225" stroke="#d29922"/>
+  <text x="485" y="215" fill="#d29922" font-size="10">no</text>
+
+  <rect x="370" y="225" width="200" height="35" rx="4" fill="#1c2333" stroke="#d29922"/>
+  <text x="470" y="247" fill="#d29922" font-size="11" text-anchor="middle">Fix based on test output</text>
+
+  <!-- Retry arrow -->
+  <line x1="370" y1="242" x2="165" y2="242" stroke="#d29922"/>
+  <line x1="165" y1="242" x2="165" y2="200" stroke="#d29922" marker-end="url(#a3)"/>
+  <text x="260" y="258" fill="#8b949e" font-size="10">retry (up to 3x per approach)</text>
+
+  <!-- Rollback -->
+  <rect x="100" y="275" width="280" height="35" rx="4" fill="#2a1a1a" stroke="#f85149"/>
+  <text x="240" y="297" fill="#f85149" font-size="11" text-anchor="middle">After 3 failures: ROLLBACK to checkpoint, try new approach</text>
+  <line x1="240" y1="275" x2="240" y2="258" stroke="#f85149" stroke-dasharray="3,3"/>
+
+  <!-- Fresh context note -->
+  <rect x="420" y="275" width="280" height="35" rx="4" fill="#1a1a2a" stroke="#bc8cff"/>
+  <text x="560" y="297" fill="#bc8cff" font-size="11" text-anchor="middle">Summarize failure, start fresh context</text>
+</svg>
+
+<h3>3.3 Fresh Context on Backtrack</h3>
+
+<div class="card">
+  <h4>The key insight for Gemini</h4>
+  <p>When rolling back, don't just undo the code changes — also <strong>reset the conversation context</strong>. Start a new context window with:</p>
+  <ol>
+    <li>The original task description</li>
+    <li>The repo map (from Design Doc 03)</li>
+    <li>A summary of what was tried and why it failed</li>
+    <li>Explicit instruction to try a different approach</li>
+  </ol>
+  <p>This prevents the "context pollution" problem where traces of a failed approach bias the model toward making the same mistake again.</p>
+
+  <pre><code>// Context for attempt #2 after rollback:
+
+const freshContext = `
+## Task
+${originalTaskDescription}
+
+## Repository Map
+${repoMap}
+
+## Previous Attempt (FAILED — do NOT repeat this approach)
+Approach: ${attempt1.summary}
+Failure reason: ${attempt1.failureReason}
+Key test errors: ${attempt1.testErrors.slice(0, 5).join('\n')}
+
+## Instructions
+Try a DIFFERENT approach. Do not repeat the failed strategy.
+Consider: ${suggestedAlternatives}
+`;</code></pre>
+</div>
+
+<h3>3.4 Lightweight Alternative: Best-of-N Sampling</h3>
+
+<div class="card">
+  <h4>The Agentless approach — simpler, effective</h4>
+  <p>Instead of complex tree search, run the entire agent N times independently (N=3-5) with different random seeds or slight prompt variations. Use test results to select the best patch. This is what Agentless does, and it's surprisingly competitive.</p>
+
+  <p>Advantages for Gemini:</p>
+  <ul>
+    <li>Each attempt gets a completely fresh context — no context fragility</li>
+    <li>No backtracking logic needed — just run N independent processes</li>
+    <li>Can run in parallel if API rate limits allow</li>
+    <li>Natural diversity in approaches from LLM sampling</li>
+  </ul>
+
+  <p>Disadvantages:</p>
+  <ul>
+    <li>N times the API cost</li>
+    <li>Requires test execution to select the best patch (see Design Doc 02)</li>
+    <li>Doesn't help with tasks where the fundamental approach is always wrong</li>
+  </ul>
+</div>
+
+<h2>4. The SWE-agent Insight: Constraints Help</h2>
+
+<div class="card">
+  <p>One of the most counterintuitive findings from SWE-agent research: <strong>constraining what the agent can see improves performance</strong>. Their Agent-Computer Interface (ACI) limits the agent to a 100-line window at a time, with explicit scroll/search commands.</p>
+
+  <p>This is directly relevant to Gemini's context fragility:</p>
+  <ul>
+    <li><strong>Current <code class="inline-code">read_file</code></strong>: Returns the entire file. A 2000-line file dumps 2000 lines into context.</li>
+    <li><strong>ACI-style <code class="inline-code">read_file</code></strong>: Returns a 100-line window. Agent must explicitly navigate to find what it needs.</li>
+  </ul>
+
+  <p>This trades off convenience for focus. The agent loads less irrelevant context, so what it does load gets more attention from the model.</p>
+
+  <h4>Practical adaptation for Gemini CLI</h4>
+  <p>Rather than fully adopting SWE-agent's ACI (which would be a major UX change), add a <strong>smart truncation mode</strong> for <code class="inline-code">read_file</code>:</p>
+  <ul>
+    <li>For files &lt; 200 lines: return full content (current behavior)</li>
+    <li>For files &gt; 200 lines: return the function/class containing the target line, plus 50 lines of surrounding context</li>
+    <li>Always show the file's skeleton (all function/class definitions with line numbers) so the agent knows what's in the file</li>
+  </ul>
+</div>
+
+<h2>5. Affected Files</h2>
+
+<table>
+  <tr><th>File</th><th>Change</th><th>Effort</th></tr>
+  <tr>
+    <td><code>packages/core/src/agents/checkpoint-manager.ts</code></td>
+    <td>New: git-based checkpoint/rollback</td>
+    <td><span class="badge medium">Medium</span></td>
+  </tr>
+  <tr>
+    <td><code>packages/core/src/agents/local-executor.ts</code></td>
+    <td>Integrate checkpoint/rollback with agent loop, fresh context on backtrack</td>
+    <td><span class="badge high">High</span></td>
+  </tr>
+  <tr>
+    <td><code>packages/core/src/tools/read-file.ts</code></td>
+    <td>Smart truncation for large files (optional)</td>
+    <td><span class="badge medium">Medium</span></td>
+  </tr>
+  <tr>
+    <td><code>packages/core/src/prompts/snippets.ts</code></td>
+    <td>Instructions for checkpoint usage and backtracking</td>
+    <td><span class="badge low">Low</span></td>
+  </tr>
+</table>
+
+<h2>6. Risk Assessment</h2>
+
+<table>
+  <tr><th>Risk</th><th>Severity</th><th>Mitigation</th></tr>
+  <tr>
+    <td>Git operations interfere with the user's repo state</td>
+    <td><span class="badge high">High</span></td>
+    <td>Only use checkpointing in benchmark/headless mode, or work on a detached branch. Never modify the user's working branch without consent.</td>
+  </tr>
+  <tr>
+    <td>Multiple attempts multiply API costs</td>
+    <td><span class="badge medium">Medium</span></td>
+    <td>Cap at 3 attempts per task. Use lighter model for initial exploration if available.</td>
+  </tr>
+  <tr>
+    <td>Fresh context loses useful insights from failed attempt</td>
+    <td><span class="badge medium">Medium</span></td>
+    <td>Include structured failure summary in the fresh context. The summary is small enough not to pollute, but informative enough to prevent repeating mistakes.</td>
+  </tr>
+  <tr>
+    <td>Smart file truncation hides code the agent needs</td>
+    <td><span class="badge medium">Medium</span></td>
+    <td>Always show the file skeleton. Agent can request specific line ranges if needed. Only truncate for files &gt; 200 lines.</td>
+  </tr>
+</table>
+
+<h2>7. Recommendation</h2>
+
+<div class="card">
+  <p>Start with the <strong>prompt-level approach</strong>:</p>
+  <ol>
+    <li>Add instructions telling the agent to checkpoint its approach mentally and consider alternatives if stuck</li>
+    <li>Implement <strong>Best-of-N sampling</strong> as a command-line option (<code class="inline-code">--attempts 3</code>) — simple, effective, no code complexity</li>
+    <li>Add <strong>smart file truncation</strong> to <code class="inline-code">read_file</code> — low risk, immediate context savings</li>
+  </ol>
+  <p>Only pursue full git-based checkpointing if the simpler approaches don't show enough improvement. The research suggests Best-of-N is surprisingly competitive with tree search for most tasks.</p>
+</div>
+
+<h2>8. Competitor Analysis: How Other CLIs Handle Exploration</h2>
+
+<div class="card">
+  <h4>Trae Agent — Sequential Thinking Tool</h4>
+  <p>Trae provides a <code class="inline-code">sequential_thinking_tool.py</code> that gives the agent a structured interface for multi-step reasoning:</p>
+  <ul>
+    <li><strong>Linear progression</strong>: Numbered thoughts (1, 2, 3...) with a declared total</li>
+    <li><strong>Revision</strong>: Can go back and revise thought #2 after writing thought #5</li>
+    <li><strong>Branching</strong>: Can fork from any previous thought to explore an alternative</li>
+    <li><strong>Dynamic expansion</strong>: Can add more thoughts even after reaching the declared total</li>
+    <li><strong>Hypothesis tracking</strong>: Thoughts can be tagged as hypotheses for later verification</li>
+  </ul>
+  <p>This is essentially a <strong>structured scratchpad</strong> that makes the agent's reasoning explicit and backtrackable. The branching mechanism directly addresses the "tunnel vision" problem: instead of committing to hypothesis #1, the agent can fork at a decision point and explore both branches.</p>
+  <p>Key insight: this doesn't require any code changes to the agent loop. It's just a tool with memory (the thought history) that gives the model a framework for organizing its own reasoning.</p>
+</div>
+
+<div class="card">
+  <h4>Trae Agent — Reflection on Failed Tools</h4>
+  <p>In <code class="inline-code">base_agent.py</code> (lines 246-257), Trae explicitly reflects failed tool results back as assistant-role messages:</p>
+  <pre><code>"The tool execution failed with error: {error}.
+Consider trying a different approach or fixing the parameters."</code></pre>
+  <p>This is subtly different from just returning the error as a tool result. By framing it as guidance ("consider a different approach"), it nudges the model toward <strong>strategic pivoting</strong> rather than blind retry. The message comes from the assistant role, which models tend to treat as more authoritative than tool output.</p>
+</div>
+
+<div class="card">
+  <h4>Grok CLI — Fuzzy Edit Matching</h4>
+  <p>Grok's text editor (<code class="inline-code">text-editor.ts</code>, lines 411-454) solves a practical exploration problem: when the model's mental model of the file diverges from reality.</p>
+  <ul>
+    <li>When exact string match fails for multi-line edits, Grok falls back to <strong>structural analysis</strong></li>
+    <li>It tokenizes by control flow keywords and compares structure, not text</li>
+    <li>This allows edits to succeed even when whitespace, comments, or formatting differ from what the model predicted</li>
+  </ul>
+  <p>This addresses a specific Gemini failure mode: the model reads a file, does some work, then tries to edit the file but its recalled version doesn't exactly match (especially after context compression). Fuzzy matching turns a hard failure into a successful edit.</p>
+</div>
+
+<div class="card">
+  <h4>Grok CLI — Session-Based Approval Acceleration</h4>
+  <p>Grok's confirmation service lets users approve "all operations of this type" once. This is relevant for automated exploration: when running benchmarks or autonomous tasks, per-operation approval creates friction that slows the agent and fills context with approval dialogues. Session-based approval eliminates this overhead.</p>
+  <p>Gemini CLI already has <code class="inline-code">-y</code> for auto-approve, but the per-type granularity (approve file ops but require confirmation for bash) is a useful UX pattern for production use.</p>
+</div>
+
+<h2>9. Deeper Analysis: The Nature of Agent Exploration</h2>
+
+<div class="card">
+  <h4>The Exploration-Exploitation Tradeoff in Coding Agents</h4>
+  <p>Coding agents face a classic explore-exploit dilemma, but with a twist specific to LLMs:</p>
+  <ul>
+    <li><strong>Exploration</strong> (reading files, searching code, testing hypotheses) — adds context, which degrades reasoning for context-fragile models</li>
+    <li><strong>Exploitation</strong> (writing code based on current understanding) — risks being wrong if exploration was insufficient</li>
+  </ul>
+  <p>Claude (lower context fragility) can afford deep exploration. Gemini cannot. This explains Gemini's laziness as a rational strategy: given its context fragility, premature exploitation is often better than thorough exploration that pollutes context.</p>
+  <p><strong>The solution isn't to force Gemini to explore more — it's to make exploration cheaper in context terms.</strong> Every technique in this design doc (checkpointing, fresh context, smart truncation) serves this goal: enabling exploration without the context tax.</p>
+</div>
+
+<div class="card">
+  <h4>Why Tree Search Is Probably Overkill (For Now)</h4>
+  <p>CodeTree and EnCompass show impressive gains (+23%, +15-40%) from MCTS-style tree search. But the implementation complexity is enormous, and the gains are relative to a weak baseline. Consider:</p>
+  <ul>
+    <li><strong>Best-of-N with N=3</strong> captures most of the benefit of tree search (diverse attempts, best patch selection) with zero architectural complexity</li>
+    <li><strong>Linear agent + test verification</strong> (Design Doc 02) already provides one "branch" per test failure cycle</li>
+    <li><strong>Trae's sequential thinking tool</strong> gives lightweight branching without any agent loop changes</li>
+  </ul>
+  <p>The marginal value of tree search over these simpler approaches is small for Gemini, because Gemini's bottleneck is context quality, not search strategy. A tree search that explores 5 branches in the same context window will likely produce 5 mediocre solutions rather than 1 good one. Best-of-N with fresh context for each attempt is strictly better for a context-fragile model.</p>
+</div>
+
+<div class="card">
+  <h4>Structured Thinking: Tool vs Prompt</h4>
+  <p>Trae implements structured thinking as a tool. Claude uses extended thinking as a model capability. The tool-based approach has a unique advantage for weaker models: it forces the model to <strong>externalize reasoning</strong> into a structured format rather than doing it implicitly.</p>
+  <p>For Gemini, a structured thinking tool could work as follows:</p>
+  <pre><code>// Before implementing a fix, the agent would call:
+sequential_thinking({
+  thought: "Hypothesis: The bug is in the data serialization layer because...",
+  thought_number: 1,
+  total_thoughts: 3,
+  next_action: "Read src/serialization.py to verify"
+})
+
+// After reading the file:
+sequential_thinking({
+  thought: "Hypothesis confirmed. The issue is in serialize_date() at line 45...",
+  thought_number: 2,
+  total_thoughts: 3,
+  next_action: "Write fix and reproduction test"
+})
+
+// This creates an auditable reasoning chain that:
+// 1. Forces the model to articulate its hypothesis before acting
+// 2. Creates natural checkpoints for backtracking
+// 3. Prevents "stream of consciousness" exploration that wastes context</code></pre>
+  <p>The key insight: <strong>structured thinking is cheap in context (50-100 tokens per thought) but forces expensive reasoning to happen before expensive actions</strong>. For a model prone to laziness, this front-loads the thinking that would otherwise be skipped.</p>
+</div>
+
+<div class="card">
+  <h4>The "Fresh Context" Advantage for Weak Models</h4>
+  <p>A pattern emerging across all competitor analysis: weaker models benefit disproportionately from fresh context. Consider the evidence:</p>
+  <ul>
+    <li><strong>Agentless</strong>: No agent loop at all — each LLM call gets perfectly curated context. 41% SWE-bench.</li>
+    <li><strong>Best-of-N</strong>: Each attempt starts fresh. Often matches tree search with complex state management.</li>
+    <li><strong>mini-swe-agent</strong>: Linear history only (no compression). 74% SWE-bench.</li>
+  </ul>
+  <p>The pattern: <strong>the simpler the context management, the better weaker models perform</strong>. Complex context (compressed summaries, long tool histories, accumulated state) creates noise that degrades reasoning. Fresh, clean context with only the essential information produces better results.</p>
+  <p>This suggests our most impactful exploration strategy for Gemini is not sophisticated tree search, but rather: <strong>try, test, and if stuck, restart with a clean slate + failure summary</strong>. Simple, radical, effective.</p>
+</div>
+
+<div class="card">
+  <h4>Practical Priority: What to Implement First</h4>
+  <p>Based on the competitor analysis and deeper thinking, the revised priority order is:</p>
+  <ol>
+    <li><strong>Sequential thinking tool</strong> (from Trae) — Minimal code, forces better reasoning, no context overhead. Can be a prompt-only change that tells Gemini to think step-by-step in a structured format.</li>
+    <li><strong>Best-of-N with fresh context</strong> — Simple <code class="inline-code">--attempts N</code> flag. Each attempt starts clean. Use test results to select best patch. No backtracking logic needed.</li>
+    <li><strong>Fuzzy edit matching</strong> (from Grok) — Prevents hard failures when Gemini's memory of file contents drifts. Low effort, high resilience improvement.</li>
+    <li><strong>Git checkpointing</strong> — Only if Best-of-N proves insufficient. The complexity is warranted only if we need mid-attempt rollback (which Best-of-N avoids entirely).</li>
+  </ol>
+</div>
+
+<div class="nav" style="margin-top:3rem"><a href="03-smart-context-management.html">&larr; Previous: Smart Context Management</a> | <a href="00-index.html">Index</a></div>
+</body>
+</html>

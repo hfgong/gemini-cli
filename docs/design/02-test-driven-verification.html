@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Design Doc 02: Test-Driven Verification</title>
+<style>
+  :root { --bg: #0d1117; --surface: #161b22; --surface2: #1c2333; --border: #30363d; --text: #e6edf3; --muted: #8b949e; --accent: #58a6ff; --green: #3fb950; --yellow: #d29922; --red: #f85149; --purple: #bc8cff; --code-bg: #1a1e2a; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.7; padding: 2rem; max-width: 1000px; margin: 0 auto; }
+  a { color: var(--accent); }
+  h1 { font-size: 2rem; color: var(--accent); margin-bottom: 0.3rem; }
+  h2 { font-size: 1.5rem; margin: 2.5rem 0 1rem; color: var(--accent); border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+  h3 { font-size: 1.2rem; margin: 1.8rem 0 0.8rem; color: var(--green); }
+  h4 { font-size: 1.05rem; margin: 1.2rem 0 0.5rem; color: var(--yellow); }
+  p, li { margin: 0.5rem 0; }
+  ul, ol { padding-left: 1.5rem; }
+  .subtitle { color: var(--muted); margin-bottom: 2rem; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 1.5rem; margin: 1rem 0; }
+  pre { background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 1rem; overflow-x: auto; font-size: 0.9rem; line-height: 1.5; margin: 1rem 0; }
+  code { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.9em; }
+  .inline-code { background: var(--code-bg); padding: 2px 6px; border-radius: 4px; }
+  .badge { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; }
+  .badge.high { background: #2a1a1a; color: var(--red); }
+  .badge.medium { background: #2a2a1a; color: var(--yellow); }
+  .badge.low { background: #1a2a1a; color: var(--green); }
+  table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+  th, td { padding: 0.5rem 1rem; text-align: left; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-size: 0.85rem; text-transform: uppercase; }
+  svg { max-width: 100%; height: auto; margin: 1rem 0; }
+  .nav { color: var(--muted); font-size: 0.9rem; margin-bottom: 1.5rem; }
+</style>
+</head>
+<body>
+
+<div class="nav"><a href="00-index.html">&larr; Back to Index</a></div>
+
+<h1>Design Doc 02: Test-Driven Verification</h1>
+<p class="subtitle">Force the agent to verify its work by running tests before declaring completion.<br>
+<span class="badge medium">Priority: Highest ROI</span> <span class="badge low">Risk: Low</span> <span class="badge low">Effort: Medium</span></p>
+
+<h2>1. Problem Statement</h2>
+
+<div class="card">
+  <h4>Observation from FeatureBench A/B Testing</h4>
+  <p>In our FeatureBench lite evaluation (28 tasks), <strong>neither the baseline nor the changed agent ever ran <code class="inline-code">pytest</code> to verify its work</strong>. Both versions wrote code and immediately called <code class="inline-code">complete_task</code> without any validation.</p>
+  <p>The one task the baseline resolved (<code class="inline-code">pandas/iceberg</code>) was correct by luck — the changed version produced nearly identical code but got one parameter wrong (<code class="inline-code">scan.limit()</code> vs <code class="inline-code">table.scan(limit=)</code>), which a single test run would have caught.</p>
+</div>
+
+<p>Gemini's "laziness problem" manifests most critically at the end of the task: the agent writes code and declares victory without checking if the code actually works. This is the single highest-leverage intervention point because:</p>
+
+<ul>
+  <li>It doesn't increase context during the creative/coding phase (no reasoning quality degradation)</li>
+  <li>It catches both trivial errors (syntax, imports) and semantic errors (wrong API usage)</li>
+  <li>It gives the agent a chance to self-correct before the final patch is captured</li>
+  <li>The test infrastructure already exists in every SWE-bench/FeatureBench task</li>
+</ul>
+
+<h2>2. Proposed Design</h2>
+
+<h3>2.1 Approach: Completion Gate</h3>
+
+<p>Intercept the <code class="inline-code">complete_task</code> tool call and inject a verification step. The agent must demonstrate that its changes pass relevant tests before the completion is accepted.</p>
+
+<svg viewBox="0 0 800 320" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto"><polygon points="0 0, 10 3.5, 0 7" fill="#58a6ff"/></marker>
+  </defs>
+  <rect x="10" y="10" width="780" height="300" rx="8" fill="#161b22" stroke="#30363d"/>
+  <text x="400" y="35" fill="#8b949e" font-size="13" text-anchor="middle">Current Flow vs Proposed Flow</text>
+
+  <!-- Current flow -->
+  <text x="30" y="70" fill="#f85149" font-size="12" font-weight="bold">CURRENT (no verification):</text>
+  <rect x="30" y="80" width="140" height="35" rx="4" fill="#1c2333" stroke="#30363d"/>
+  <text x="100" y="102" fill="#e6edf3" font-size="12" text-anchor="middle">Agent writes code</text>
+  <line x1="170" y1="97" x2="210" y2="97" stroke="#58a6ff" marker-end="url(#arrow)"/>
+  <rect x="210" y="80" width="160" height="35" rx="4" fill="#1c2333" stroke="#30363d"/>
+  <text x="290" y="102" fill="#e6edf3" font-size="12" text-anchor="middle">complete_task()</text>
+  <line x1="370" y1="97" x2="410" y2="97" stroke="#58a6ff" marker-end="url(#arrow)"/>
+  <rect x="410" y="80" width="120" height="35" rx="4" fill="#2a1a1a" stroke="#f85149"/>
+  <text x="470" y="102" fill="#f85149" font-size="12" text-anchor="middle">Patch captured</text>
+  <text x="570" y="102" fill="#8b949e" font-size="11">(may be wrong)</text>
+
+  <!-- Proposed flow -->
+  <text x="30" y="160" fill="#3fb950" font-size="12" font-weight="bold">PROPOSED (with verification gate):</text>
+  <rect x="30" y="170" width="140" height="35" rx="4" fill="#1c2333" stroke="#30363d"/>
+  <text x="100" y="192" fill="#e6edf3" font-size="12" text-anchor="middle">Agent writes code</text>
+  <line x1="170" y1="187" x2="210" y2="187" stroke="#58a6ff" marker-end="url(#arrow)"/>
+
+  <rect x="210" y="170" width="160" height="35" rx="4" fill="#1a2a1a" stroke="#3fb950"/>
+  <text x="290" y="192" fill="#3fb950" font-size="12" text-anchor="middle">Run relevant tests</text>
+  <line x1="370" y1="187" x2="410" y2="187" stroke="#58a6ff" marker-end="url(#arrow)"/>
+
+  <rect x="410" y="170" width="100" height="35" rx="4" fill="#1c2333" stroke="#30363d"/>
+  <text x="460" y="192" fill="#e6edf3" font-size="12" text-anchor="middle">Tests pass?</text>
+
+  <!-- Yes path -->
+  <line x1="510" y1="187" x2="560" y2="187" stroke="#3fb950" marker-end="url(#arrow)"/>
+  <text x="535" y="180" fill="#3fb950" font-size="10">yes</text>
+  <rect x="560" y="170" width="120" height="35" rx="4" fill="#1a2a1a" stroke="#3fb950"/>
+  <text x="620" y="192" fill="#3fb950" font-size="12" text-anchor="middle">complete_task()</text>
+
+  <!-- No path -->
+  <line x1="460" y1="205" x2="460" y2="240" stroke="#f85149"/>
+  <line x1="460" y1="240" x2="290" y2="240" stroke="#f85149"/>
+  <line x1="290" y1="240" x2="290" y2="260" stroke="#f85149" marker-end="url(#arrow)"/>
+  <text x="380" y="255" fill="#f85149" font-size="10">no</text>
+  <rect x="210" y="260" width="160" height="35" rx="4" fill="#2a2a1a" stroke="#d29922"/>
+  <text x="290" y="282" fill="#d29922" font-size="12" text-anchor="middle">Fix &amp; retry (up to 3x)</text>
+  <line x1="210" y1="277" x2="100" y2="277" stroke="#d29922"/>
+  <line x1="100" y1="277" x2="100" y2="210" stroke="#d29922" marker-end="url(#arrow)"/>
+</svg>
+
+<h3>2.2 Implementation Options</h3>
+
+<div class="card">
+  <h4>Option A: Prompt-Only (Lowest effort)</h4>
+  <p>Add explicit instructions to the system prompt requiring the agent to run tests before calling <code class="inline-code">complete_task</code>.</p>
+  <pre><code>// Add to snippets.ts TASK_COMPLETENESS section:
+
+Before calling complete_task, you MUST:
+1. Identify test files related to your changes (look for test_*.py, *_test.py, or tests/ directory)
+2. Run the relevant tests: e.g., `python -m pytest path/to/test_file.py -x -q`
+3. If tests fail, fix your code and re-run until they pass
+4. Only call complete_task after tests pass
+
+If you cannot find relevant tests, state this explicitly and explain
+how you verified correctness manually.</code></pre>
+  <p><strong>Pros:</strong> Zero code changes, easy to A/B test<br>
+  <strong>Cons:</strong> Gemini may ignore the instruction (it already ignores "be thorough"); increases system prompt size</p>
+</div>
+
+<div class="card">
+  <h4>Option B: Completion Gate Hook (Medium effort, recommended)</h4>
+  <p>Modify <code class="inline-code">processFunctionCalls()</code> in <code class="inline-code">local-executor.ts</code> to intercept <code class="inline-code">complete_task</code> and inject a verification turn.</p>
+  <pre><code>// In local-executor.ts::processFunctionCalls()
+// When complete_task is detected:
+
+if (toolName === TASK_COMPLETE_TOOL_NAME) {
+  // Before accepting completion, inject verification
+  const verificationResult = await this.runVerificationStep(chat, signal);
+
+  if (verificationResult.testsFound && !verificationResult.allPassed) {
+    // Reject completion, tell the agent to fix failures
+    taskCompleted = false;
+    // Feed test failure output back to the model
+    const feedback = `Your changes have test failures:\n${verificationResult.output}\n` +
+      `Please fix the failing tests and try again.`;
+    // Continue the loop with this feedback
+  }
+}</code></pre>
+  <p><strong>Pros:</strong> Enforced — agent can't skip verification; structured feedback loop<br>
+  <strong>Cons:</strong> Requires code changes; may increase task duration; needs test discovery heuristic</p>
+</div>
+
+<div class="card">
+  <h4>Option C: Pre-completion Tool (Higher effort)</h4>
+  <p>Add a new <code class="inline-code">verify_changes</code> tool that the agent can (and should) call before <code class="inline-code">complete_task</code>.</p>
+  <pre><code>// New tool: verify_changes
+{
+  name: "verify_changes",
+  description: "Run tests related to your changes and report results. " +
+    "Call this BEFORE complete_task to validate your work.",
+  parameters: {
+    test_command: "Command to run tests (e.g., pytest path/to/test.py)",
+    working_directory: "Directory to run from"
+  },
+  execute: async (params) => {
+    const result = await shell.execute(params.test_command, {
+      cwd: params.working_directory,
+      timeout: 120_000
+    });
+    return {
+      passed: result.exitCode === 0,
+      output: result.stdout + result.stderr,
+      exitCode: result.exitCode
+    };
+  }
+}</code></pre>
+  <p><strong>Pros:</strong> Clean separation of concerns; agent retains agency over what to test<br>
+  <strong>Cons:</strong> Agent may still skip calling it; needs prompt changes to encourage use</p>
+</div>
+
+<h3>2.3 Recommended Approach: A + B Combined</h3>
+
+<p>Use <strong>Option A</strong> (prompt changes) to encourage the agent to test proactively, and <strong>Option B</strong> (completion gate) as a safety net to catch cases where the agent skips testing.</p>
+
+<h2>3. Test Discovery Heuristic</h2>
+
+<p>The completion gate needs to find relevant test files. Heuristic:</p>
+
+<pre><code>async function discoverRelevantTests(changedFiles: string[]): Promise&lt;string[]&gt; {
+  const testFiles: string[] = [];
+
+  for (const file of changedFiles) {
+    const dir = path.dirname(file);
+    const base = path.basename(file, path.extname(file));
+
+    // Pattern 1: test_foo.py for foo.py
+    const candidates = [
+      path.join(dir, `test_${base}.py`),
+      path.join(dir, `${base}_test.py`),
+      path.join(dir, 'tests', `test_${base}.py`),
+      path.join(dir, '..', 'tests', `test_${base}.py`),
+    ];
+
+    for (const candidate of candidates) {
+      if (await fileExists(candidate)) {
+        testFiles.push(candidate);
+      }
+    }
+  }
+
+  // Fallback: grep for imports of changed modules in test files
+  if (testFiles.length === 0) {
+    // Use glob to find test files, grep for module references
+  }
+
+  return [...new Set(testFiles)];
+}</code></pre>
+
+<h2>4. Affected Files</h2>
+
+<table>
+  <tr><th>File</th><th>Change</th><th>Effort</th></tr>
+  <tr>
+    <td><code>packages/core/src/prompts/snippets.ts</code></td>
+    <td>Add test-before-completion instruction to TASK_COMPLETENESS</td>
+    <td><span class="badge low">Low</span></td>
+  </tr>
+  <tr>
+    <td><code>packages/core/src/agents/local-executor.ts</code></td>
+    <td>Add completion gate in <code>processFunctionCalls()</code></td>
+    <td><span class="badge medium">Medium</span></td>
+  </tr>
+  <tr>
+    <td><code>packages/core/src/agents/verification.ts</code></td>
+    <td>New file: test discovery and execution logic</td>
+    <td><span class="badge medium">Medium</span></td>
+  </tr>
+  <tr>
+    <td><code>packages/core/src/agents/local-executor.test.ts</code></td>
+    <td>Tests for completion gate behavior</td>
+    <td><span class="badge low">Low</span></td>
+  </tr>
+</table>
+
+<h2>5. Risk Assessment</h2>
+
+<table>
+  <tr><th>Risk</th><th>Severity</th><th>Mitigation</th></tr>
+  <tr>
+    <td>Test runs consume time, reducing turns available for coding</td>
+    <td><span class="badge medium">Medium</span></td>
+    <td>Set test timeout (120s). Only run on completion, not every turn. Count verification turns separately from coding turns.</td>
+  </tr>
+  <tr>
+    <td>Test output floods context, degrading Gemini's reasoning</td>
+    <td><span class="badge medium">Medium</span></td>
+    <td>Truncate test output to first 50 lines of failures. Summarize: "3/10 tests failed: test_foo, test_bar, test_baz"</td>
+  </tr>
+  <tr>
+    <td>Wrong test files discovered, causing false negatives</td>
+    <td><span class="badge low">Low</span></td>
+    <td>Use heuristic discovery + let agent override with explicit test command. Don't hard-block on test failures — warn and allow override after 3 attempts.</td>
+  </tr>
+  <tr>
+    <td>Infinite fix-test loop if tests are flaky or unrelated</td>
+    <td><span class="badge low">Low</span></td>
+    <td>Cap verification retries at 3. After 3 failures, accept completion with a warning.</td>
+  </tr>
+</table>
+
+<h2>6. Expected Impact</h2>
+
+<div class="card">
+  <p>Based on FeatureBench lite analysis:</p>
+  <ul>
+    <li><strong>pandas/iceberg</strong> — Would have caught the <code class="inline-code">scan.limit()</code> vs <code class="inline-code">table.scan(limit=)</code> error. One test run = task resolved. (+1 resolved)</li>
+    <li><strong>seaborn/algorithms</strong> — Changed version scored 8/13 instead of 12/13. Test feedback could guide fixes for the remaining 5 tests.</li>
+    <li><strong>xarray/treenode</strong> — Changed version scored 11/34 instead of 17/34. Test output would help identify regressions.</li>
+    <li><strong>8 newly-attempted tasks</strong> — All produced patches but 0 resolved. Test verification would either fix them or prevent bad patches.</li>
+  </ul>
+  <p>Conservative estimate: <strong>+5-15% absolute improvement in resolve rate</strong>, primarily from catching near-miss solutions.</p>
+</div>
+
+<h2>7. Industry Evidence</h2>
+
+<div class="card">
+  <h4>Every top SWE-bench agent uses iterative test feedback</h4>
+  <table>
+    <tr><th>Agent</th><th>SWE-bench Verified</th><th>Test Strategy</th></tr>
+    <tr><td><strong>Devin</strong> (Cognition)</td><td>72%</td><td>Runs tests mid-process, iterates for 10+ minutes. Uses print-statement debugging. 72% of passing solutions take &gt;10 minutes of iteration.</td></tr>
+    <tr><td><strong>OpenHands</strong></td><td>72%</td><td>Tight edit-test loop in sandboxed workspace. Event log preserves all commands and results.</td></tr>
+    <tr><td><strong>mini-swe-agent</strong></td><td>74%</td><td>100 lines of Python. Just bash + linear history. Test execution through bash is the critical enabler.</td></tr>
+    <tr><td><strong>Agentless</strong></td><td>41%</td><td>No agent loop at all. Generates N patches, uses test execution to select the best one. $0.70/issue.</td></tr>
+    <tr><td><strong>SICA</strong></td><td>17% &rarr; 53%</td><td>Self-improving agent that edits its own scaffolding. Over 14 iterations, autonomously developed test verification.</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h4>The RALPH Loop pattern (proven in production)</h4>
+  <p>An autonomous testing framework where the agent iteratively executes tests, verifies results, and fixes failures:</p>
+  <ol>
+    <li>Run test suite</li>
+    <li>If test fails and fix_attempts &lt; 3: analyze root cause, implement fix, re-test</li>
+    <li>After 3 failures: mark as "known_issue" and move on</li>
+  </ol>
+  <p>Real-world result: 38 test cases completed in 3.5 hours with 100% pass rate, catching bugs that code review alone missed.</p>
+  <p class="ref">Reference: <a href="https://www.nathanonn.com/claude-code-testing-ralph-loop-verification/">RALPH Loop for Claude Code</a></p>
+</div>
+
+<div class="card">
+  <h4>Test output handling: keep it simple</h4>
+  <p>JetBrains NeurIPS 2025 research compared observation masking (simple truncation) vs LLM summarization of test output. Finding: <strong>simple truncation matches or beats summarization</strong> while being cheaper. LLM summarization actually caused agents to run 13-15% longer by obscuring stop signals.</p>
+  <p>Practical recommendation: truncate test output to first 50 lines of failures. Write full output to a file if the agent needs more detail.</p>
+  <p class="ref">Reference: <a href="https://blog.jetbrains.com/research/2025/12/efficient-context-management/">JetBrains: "The Complexity Trap"</a></p>
+</div>
+
+<div class="card">
+  <h4>mini-swe-agent: proof that minimal scaffolding works</h4>
+  <p>The most striking finding: mini-swe-agent achieves &gt;74% on SWE-bench Verified with ~100 lines of Python. No tool-calling interface, no plugins, no retrievers. Just bash commands via <code class="inline-code">subprocess.run</code> and a linear message history. The simplicity is the feature.</p>
+  <p>This validates Option A (prompt-only) as a viable approach — with a strong enough model, you just need to tell it to run tests. The question is whether Gemini is "strong enough" to follow the instruction reliably.</p>
+  <p class="ref">Reference: <a href="https://github.com/SWE-agent/mini-swe-agent">mini-swe-agent GitHub</a></p>
+</div>
+
+<h2>8. Competitor Analysis: How Other CLIs Handle Verification</h2>
+
+<div class="card">
+  <h4>Trae Agent (ByteDance) — Mandatory 7-Step Workflow</h4>
+  <p>Trae's system prompt (<code class="inline-code">agent_prompt.py</code>) enforces a rigid 7-step methodology where steps 3 and 6 are explicitly marked as "crucial":</p>
+  <ol>
+    <li>Understand the Problem</li>
+    <li>Explore and Locate</li>
+    <li><strong>Reproduce the Bug (Crucial Step)</strong> — "CREATE A SCRIPT that reliably reproduces the bug"</li>
+    <li>Debug and Diagnose</li>
+    <li>Develop and Implement</li>
+    <li><strong>Verify and Test Rigorously</strong> — run reproduction script, run test suite, write new pytest cases</li>
+    <li>Summarize Work</li>
+  </ol>
+  <p>This is essentially our Option A (prompt-only) with much more specificity. The prompt doesn't just say "run tests" — it prescribes the exact sequence: reproduce first, then fix, then verify with multiple methods.</p>
+</div>
+
+<div class="card">
+  <h4>Trae Agent — Completion Gate with Patch Validation</h4>
+  <p>Trae implements exactly our Option B. In <code class="inline-code">trae_agent.py</code> (lines 236-244), <code class="inline-code">_is_task_completed()</code> checks if the patch is empty and returns the agent to work if so:</p>
+  <pre><code>if self.llm_indicates_task_completed(llm_response):
+    if self._is_task_completed(llm_response):  # Validates patch exists
+        execution.agent_state = AgentState.COMPLETED
+    else:
+        # Send error back as user message — forces agent to continue
+        return [LLMMessage(role="user", content=self.task_incomplete_message())]</code></pre>
+  <p>Additionally, Trae <strong>strips test file modifications from patches</strong> (lines 205-226), filtering paths matching <code class="inline-code">/test/</code>, <code class="inline-code">/tests/</code>, <code class="inline-code">test_</code>, <code class="inline-code">tox.ini</code>. This prevents the agent from "solving" tasks by modifying test expectations rather than fixing source code.</p>
+</div>
+
+<div class="card">
+  <h4>Grok CLI — No Explicit Test Verification</h4>
+  <p>Grok CLI has no test verification gate or test-before-completion prompt. It relies entirely on the model's judgment about when to call task complete. This makes Grok a useful baseline — it represents what happens without verification infrastructure.</p>
+  <p>However, Grok does have a useful pattern: <strong>headless mode</strong> (<code class="inline-code">--prompt</code> flag) with JSON output that auto-approves all confirmations. This is useful for benchmark automation and could be adapted for running verification steps non-interactively.</p>
+</div>
+
+<h2>9. Deeper Analysis: Why Verification Works Disproportionately Well</h2>
+
+<div class="card">
+  <h4>The Asymmetry of Generation vs. Verification</h4>
+  <p>There's a fundamental asymmetry in LLM capabilities: <strong>verification is dramatically easier than generation</strong>. An LLM that can only solve 30% of coding tasks from scratch can often judge the correctness of a solution with 80%+ accuracy when given test results. This is why test-driven verification has such outsized impact:</p>
+  <ul>
+    <li><strong>Generation requires world knowledge</strong> — the model must know APIs, conventions, edge cases</li>
+    <li><strong>Verification only requires reading</strong> — the test output tells the model exactly what went wrong</li>
+    <li><strong>Iterative fixing narrows the search space</strong> — each test failure eliminates a class of wrong solutions</li>
+  </ul>
+  <p>The implication: even if Gemini is a weaker generator than Claude, a test feedback loop can close a significant portion of the quality gap. The model doesn't need to get it right the first time — it needs to recognize and fix its own errors.</p>
+</div>
+
+<div class="card">
+  <h4>The Reproduce-First Pattern</h4>
+  <p>Trae's emphasis on "reproduce the bug BEFORE fixing it" is more than good engineering practice. It has a specific cognitive benefit for LLMs:</p>
+  <ul>
+    <li>Writing a reproduction script <strong>forces the model to understand the bug</strong> — it can't reproduce what it doesn't understand</li>
+    <li>The reproduction script <strong>becomes the verification oracle</strong> — the model now has a concrete yes/no signal, not just "does the code look right?"</li>
+    <li>It's a <strong>cheaper test than running the full suite</strong> — a single-file script runs in seconds, while a full pytest suite might take minutes</li>
+  </ul>
+  <p>For Gemini specifically, the reproduce-first pattern addresses laziness from a different angle: instead of telling the model "be thorough," it gives it a concrete, small, achievable task (write a 10-line reproduction script) that naturally leads to deeper understanding.</p>
+</div>
+
+<div class="card">
+  <h4>Test Output as Context — A Double-Edged Sword</h4>
+  <p>Feeding test output back to the model creates a tension specific to Gemini:</p>
+  <ul>
+    <li><strong>Benefit</strong>: Test output is the highest-information-density context possible — it tells the model exactly what's wrong</li>
+    <li><strong>Risk</strong>: A full pytest traceback with 500 lines of stack traces degrades Gemini's reasoning (context fragility)</li>
+    <li><strong>Solution</strong>: Truncate aggressively. JetBrains showed that simple truncation beats LLM summarization. But we can be smarter than blind truncation:</li>
+  </ul>
+  <pre><code>// Smart test output formatting:
+// 1. Summary line: "3 failed, 7 passed, 2 errors in 4.2s"
+// 2. For each failure: test name + assertion error (not full traceback)
+// 3. Only show full traceback for the FIRST failure
+// Total: ~20-50 lines regardless of how many tests fail</code></pre>
+  <p>This is a micro-optimization that compounds: each verification cycle stays lightweight, enabling more fix-test iterations within the same context budget.</p>
+</div>
+
+<div class="card">
+  <h4>Why Patch Filtering Matters More Than It Seems</h4>
+  <p>Trae's test-file exclusion filter seems like a benchmark anti-gaming measure, but it encodes a deeper principle: <strong>the agent should only modify source code, never test expectations</strong>. Without this:</p>
+  <ul>
+    <li>A lazy model will "fix" a failing test by changing the expected value rather than fixing the code</li>
+    <li>In FeatureBench/SWE-bench, this produces patches that pass the FAIL_TO_PASS tests trivially but break semantic correctness</li>
+    <li>This is Gemini's most likely failure mode given its laziness tendency</li>
+  </ul>
+  <p>We should implement this filter in Gemini CLI's <code class="inline-code">complete_task</code> handler, independent of the completion gate.</p>
+</div>
+
+<div class="nav" style="margin-top:3rem"><a href="00-index.html">&larr; Back to Index</a> | <a href="03-smart-context-management.html">Next: Smart Context Management &rarr;</a></div>
+</body>
+</html>

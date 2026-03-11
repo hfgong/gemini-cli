@@ -128,11 +128,23 @@ class ReadFileToolInvocation extends BaseToolInvocation<
       const [start, end] = result.linesShown!;
       const total = result.originalLineCount!;
 
+      // Smart context: extract file outline for large truncated files
+      const outline = extractFileOutline(
+        typeof result.llmContent === 'string' ? result.llmContent : '',
+        this.resolvedPath,
+        total,
+        start,
+        end,
+      );
+      const outlineSection = outline
+        ? `\n--- FILE OUTLINE (definitions found in visible range) ---\n${outline}\n`
+        : '';
+
       llmContent = `
 IMPORTANT: The file content has been truncated.
 Status: Showing lines ${start}-${end} of ${total} total lines.
 Action: To read more of the file, you can use the 'start_line' and 'end_line' parameters in a subsequent 'read_file' call. For example, to read the next section of the file, use start_line: ${end + 1}.
-
+${outlineSection}
 --- FILE CONTENT (truncated) ---
 ${result.llmContent}`;
     } else {
@@ -261,4 +273,92 @@ export class ReadFileTool extends BaseDeclarativeTool<
   override getSchema(modelId?: string) {
     return resolveToolDeclaration(READ_FILE_DEFINITION, modelId);
   }
+}
+
+/**
+ * Extracts a file outline (class/function/method definitions) from visible
+ * file content to help the agent navigate large truncated files.
+ */
+function extractFileOutline(
+  content: string,
+  filePath: string,
+  totalLines: number,
+  startLine: number,
+  _endLine: number,
+): string | null {
+  // Only generate outline for sufficiently large files
+  if (totalLines < 200) return null;
+
+  const ext = path.extname(filePath).toLowerCase();
+  const lines = content.split('\n');
+  const definitions: string[] = [];
+
+  // Language-specific definition patterns
+  let patterns: RegExp[];
+  if (['.py'].includes(ext)) {
+    patterns = [
+      /^(\s*)(class\s+\w+)/,
+      /^(\s*)(def\s+\w+)/,
+      /^(\s*)(async\s+def\s+\w+)/,
+    ];
+  } else if (['.ts', '.tsx', '.js', '.jsx', '.mjs', '.mts'].includes(ext)) {
+    patterns = [
+      /^(\s*)(export\s+)?(class\s+\w+)/,
+      /^(\s*)(export\s+)?(function\s+\w+)/,
+      /^(\s*)(export\s+)?(async\s+function\s+\w+)/,
+      /^(\s*)(export\s+)?(interface\s+\w+)/,
+      /^(\s*)(export\s+)?(type\s+\w+)/,
+      /^(\s*)(export\s+)?(const\s+\w+\s*=\s*(async\s+)?\()/,
+    ];
+  } else if (['.java', '.kt', '.scala'].includes(ext)) {
+    patterns = [
+      /^(\s*)(public|private|protected)?\s*(class|interface|enum)\s+\w+/,
+      /^(\s*)(public|private|protected)?\s*(static\s+)?\w+\s+\w+\s*\(/,
+    ];
+  } else if (['.go'].includes(ext)) {
+    patterns = [
+      /^(func\s+(\(\w+\s+\*?\w+\)\s+)?\w+)/,
+      /^(type\s+\w+\s+(struct|interface))/,
+    ];
+  } else if (['.rs'].includes(ext)) {
+    patterns = [
+      /^(\s*)(pub\s+)?(fn\s+\w+)/,
+      /^(\s*)(pub\s+)?(struct\s+\w+)/,
+      /^(\s*)(pub\s+)?(enum\s+\w+)/,
+      /^(\s*)(pub\s+)?(trait\s+\w+)/,
+      /^(\s*)(impl\s+)/,
+    ];
+  } else if (['.c', '.cpp', '.cc', '.h', '.hpp'].includes(ext)) {
+    patterns = [
+      /^(\s*)(class\s+\w+)/,
+      /^(\s*)(\w+\s+)+\w+\s*\([^)]*\)\s*\{?\s*$/,
+    ];
+  } else if (['.rb'].includes(ext)) {
+    patterns = [
+      /^(\s*)(class\s+\w+)/,
+      /^(\s*)(module\s+\w+)/,
+      /^(\s*)(def\s+\w+)/,
+    ];
+  } else {
+    return null; // Unsupported language
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    for (const pattern of patterns) {
+      if (pattern.test(line)) {
+        const lineNum = startLine + i;
+        // Trim the line for display, keeping it short
+        const trimmed = line.trimEnd();
+        const display =
+          trimmed.length > 100 ? trimmed.substring(0, 97) + '...' : trimmed;
+        definitions.push(`  L${lineNum}: ${display}`);
+        break;
+      }
+    }
+  }
+
+  if (definitions.length === 0) return null;
+
+  return definitions.join('\n');
 }

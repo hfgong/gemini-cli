@@ -6,6 +6,12 @@
 
 import type { HierarchicalMemory } from '../config/memory.js';
 import {
+  renderTestVerification,
+  renderTimeBudget,
+  type TestVerificationOptions,
+  type TimeBudgetOptions,
+} from './snippets.js';
+import {
   ACTIVATE_SKILL_TOOL_NAME,
   ASK_USER_TOOL_NAME,
   EDIT_TOOL_NAME,
@@ -31,6 +37,8 @@ export interface SystemPromptOptions {
   hookContext?: boolean;
   primaryWorkflows?: PrimaryWorkflowsOptions;
   planningWorkflow?: PlanningWorkflowOptions;
+  testVerification?: TestVerificationOptions;
+  timeBudget?: TimeBudgetOptions;
   operationalGuidelines?: OperationalGuidelinesOptions;
   sandbox?: SandboxMode;
   interactiveYoloMode?: boolean;
@@ -115,6 +123,10 @@ ${
 }
 
 ${renderOperationalGuidelines(options.operationalGuidelines)}
+
+${renderTestVerification(options.testVerification)}
+
+${renderTimeBudget(options.timeBudget)}
 
 ${renderInteractiveYoloMode(options.interactiveYoloMode)}
 

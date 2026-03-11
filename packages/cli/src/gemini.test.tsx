@@ -497,6 +497,10 @@ describe('gemini.tsx main function kitty protocol', () => {
       recordResponses: undefined,
       rawOutput: undefined,
       acceptRawOutputRisk: undefined,
+      verifyBeforeComplete: undefined,
+      protectTests: undefined,
+      reproduceFirst: undefined,
+      timeBudget: undefined,
       isCommand: undefined,
     });
 

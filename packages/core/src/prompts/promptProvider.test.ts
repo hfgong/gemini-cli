@@ -60,6 +60,9 @@ describe('PromptProvider', () => {
       getApprovedPlanPath: vi.fn().mockReturnValue(undefined),
       getApprovalMode: vi.fn(),
       isTrackerEnabled: vi.fn().mockReturnValue(false),
+      isVerifyBeforeCompleteEnabled: vi.fn().mockReturnValue(false),
+      isProtectTestsEnabled: vi.fn().mockReturnValue(false),
+      isReproduceFirstEnabled: vi.fn().mockReturnValue(false),
     } as unknown as Config;
   });
 

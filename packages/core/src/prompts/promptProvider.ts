@@ -174,6 +174,20 @@ export class PromptProvider {
           isPlanMode,
         ),
         taskTracker: config.isTrackerEnabled(),
+        testVerification: this.withSection(
+          'testVerification',
+          () => ({
+            verifyBeforeComplete: config.isVerifyBeforeCompleteEnabled(),
+            protectTests: config.isProtectTestsEnabled(),
+            reproduceFirst: config.isReproduceFirstEnabled(),
+          }),
+          config.isVerifyBeforeCompleteEnabled() ||
+            config.isProtectTestsEnabled() ||
+            config.isReproduceFirstEnabled(),
+        ),
+        timeBudget: config.getTimeBudgetMinutes()
+          ? { budgetMinutes: config.getTimeBudgetMinutes()! }
+          : undefined,
         operationalGuidelines: this.withSection(
           'operationalGuidelines',
           () => ({

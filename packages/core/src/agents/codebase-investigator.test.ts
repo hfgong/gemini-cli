@@ -53,7 +53,7 @@ describe('CodebaseInvestigatorAgent', () => {
     ]);
   });
 
-  it('should process output to a formatted JSON string', () => {
+  it('should process output to a formatted JSON string without ExplorationTrace', () => {
     const agent = CodebaseInvestigatorAgent(config);
     const report = {
       SummaryOfFindings: 'summary',
@@ -61,7 +61,12 @@ describe('CodebaseInvestigatorAgent', () => {
       RelevantLocations: [],
     };
     const processed = agent.processOutput?.(report);
-    expect(processed).toBe(JSON.stringify(report, null, 2));
+    // ExplorationTrace should be stripped to reduce context footprint
+    const expected = {
+      SummaryOfFindings: 'summary',
+      RelevantLocations: [],
+    };
+    expect(processed).toBe(JSON.stringify(expected, null, 2));
   });
 
   it('should include Windows-specific list command in system prompt when on Windows', () => {
