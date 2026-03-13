@@ -34,6 +34,66 @@ Thumbs.db
 # Ignore built ts files
 dist
 
+# Root-level build artifacts in packages
+packages/*/test-setup.js
+packages/*/test-setup.js.map
+packages/*/test-setup.d.ts
+packages/*/*.tgz
+packages/*/index.js
+packages/*/index.js.map
+packages/*/index.d.ts
+packages/*/vitest.config.js
+packages/*/vitest.config.js.map
+packages/*/vitest.config.d.ts
+evals/vitest.config.js
+evals/vitest.config.js.map
+evals/vitest.config.d.ts
+integration-tests/vitest.config.js
+integration-tests/vitest.config.js.map
+integration-tests/vitest.config.d.ts
+integration-tests/globalSetup.js
+integration-tests/globalSetup.js.map
+integration-tests/globalSetup.d.ts
+integration-tests/test-helper.js
+integration-tests/test-helper.js.map
+integration-tests/test-helper.d.ts
+integration-tests/test-mcp-server.js
+integration-tests/test-mcp-server.js.map
+integration-tests/test-mcp-server.d.ts
+evals/test-helper.js
+evals/test-helper.js.map
+evals/test-helper.d.ts
+evals/app-test-helper.js
+evals/app-test-helper.js.map
+evals/app-test-helper.d.ts
+
+# Generated snapshot files from .js tests
+packages/*/src/**/__snapshots__/*.snap.svg
+packages/*/src/**/__snapshots__/*.js.snap
+
+# In-place TypeScript build artifacts (tsc output alongside .ts sources)
+packages/*/src/**/*.js
+packages/*/src/**/*.js.map
+packages/*/src/**/*.d.ts
+packages/a2a-server/src/**/*.js
+packages/a2a-server/src/**/*.js.map
+packages/a2a-server/src/**/*.d.ts
+packages/*/examples/**/*.js
+packages/*/examples/**/*.js.map
+packages/*/examples/**/*.d.ts
+packages/devtools/client/**/*.js
+packages/devtools/client/**/*.js.map
+packages/devtools/client/**/*.d.ts
+evals/**/*.js
+evals/**/*.js.map
+evals/**/*.d.ts
+integration-tests/**/*.js
+integration-tests/**/*.js.map
+integration-tests/**/*.d.ts
+scripts/**/*.js
+scripts/**/*.js.map
+scripts/**/*.d.ts
+
 # Docker folder to help skip auth refreshes
 .docker
 
@@ -62,3 +122,8 @@ gemini-debug.log
 .gemini-clipboard/
 .eslintcache
 evals/logs/
+
+# Local artifacts
+docs/manual-test-drive-chat-logs.html
+packages/cli/*.tgz
+packages/cli/package.json.bak
