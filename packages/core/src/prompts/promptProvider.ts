@@ -180,6 +180,7 @@ export class PromptProvider {
             verifyBeforeComplete: config.isVerifyBeforeCompleteEnabled(),
             protectTests: config.isProtectTestsEnabled(),
             reproduceFirst: config.isReproduceFirstEnabled(),
+            attemptNumber: config.getAttemptNumber(),
           }),
           config.isVerifyBeforeCompleteEnabled() ||
             config.isProtectTestsEnabled() ||

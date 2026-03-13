@@ -33,19 +33,37 @@
 <p class="subtitle">Systematic improvements to make Gemini CLI more competitive with Claude Code for agentic coding tasks.</p>
 
 <div class="results">
-  <h3>FeatureBench Results (gemini-2.5-pro)</h3>
+  <h3>FeatureBench Results — Model Comparison</h3>
   <table>
-    <tr><th>Metric</th><th>Baseline (npm, lite=28)</th><th>Phase 1 Only (lite=28)</th><th>Phase 1+2 (full=141)</th></tr>
-    <tr><td>Patch generation rate</td><td>64% (18/28)</td><td>89% (25/28)</td><td>94% (133/141)</td></tr>
-    <tr><td>Resolved rate</td><td>3.6% (1/28)</td><td>0% (0/28)</td><td>1.5% (2/133)</td></tr>
-    <tr><td>Avg F2P pass rate</td><td>12.0%</td><td>8.8%</td><td>5.2%</td></tr>
-    <tr><td>API crash / timeout failures</td><td>—</td><td>—</td><td>8/141 (6 API + 2 timeout)</td></tr>
+    <tr><th>Metric</th><th>Baseline (npm, 2.5-pro)</th><th>Fork V1 (2.5-pro)</th><th>Fork V2 (2.5-pro, 5 retries)</th><th style="color:var(--green)">Fork + 3.1-pro</th></tr>
+    <tr><td>Tasks (lite split)</td><td>28</td><td>28</td><td>28</td><td>27</td></tr>
+    <tr><td>Resolved rate</td><td>0%</td><td>3.9%</td><td>0%</td><td style="color:var(--green);font-weight:600">18.5% (5/27)</td></tr>
+    <tr><td>Avg F2P pass rate</td><td>8.8%</td><td>22.3%</td><td>18.4%</td><td style="color:var(--green);font-weight:600">50.3%</td></tr>
+    <tr><td>API crash / timeout</td><td>—</td><td>—</td><td>—</td><td>0</td></tr>
   </table>
   <p style="color:var(--muted);font-size:0.85rem;margin-top:0.8rem">
-    Phase 1 increases agent effort (more patches) but decreases precision.
-    Full-split run (141 tasks) shows 1.5% resolve rate with 2 resolved tasks (mlflow trace_correlation lv1+lv2).
-    Phase 2 features (verify-before-complete, protect-tests, reproduce-first, time-budget) now default ON.
-    New A/B test in progress (2026-03-10) to measure Phase 2 impact vs. upstream baseline.
+    <strong>Key finding:</strong> Model upgrade (2.5-pro → 3.1-pro) is the single biggest lever — 0% → 18.5% resolved, 8.8% → 50.3% pass rate.
+    Fork+3.1-pro beats the official FeatureBench leaderboard entry for Gemini-CLI (10% resolved, 43.4% pass rate).
+    Resolved tasks: mlflow tracing_utils, pandas concat, pandas iceberg, xarray backends_chunks, transformers wav2vec2.
+  </p>
+</div>
+
+<div class="results">
+  <h3>FeatureBench Failure Analysis (3.1-pro, 22 unresolved)</h3>
+  <table>
+    <tr><th>Pattern</th><th>Count</th><th>Description</th></tr>
+    <tr><td>Incomplete implementation</td><td>8</td><td>Partial fix, missed edge cases — many at 60-90% pass rate</td></tr>
+    <tr><td>Missing import / NameError</td><td>4</td><td>Forgot import or function definition — trivially caught by test run</td></tr>
+    <tr><td>Wrong API / type mismatch</td><td>4</td><td>Wrong types, wrong signatures, wrong constructor args</td></tr>
+    <tr><td>Broken module</td><td>2</td><td>Changes broke existing functionality</td></tr>
+    <tr><td>CUDA incompatibility</td><td>2</td><td>Triton kernels can't compile for eval GPU (environment issue)</td></tr>
+    <tr><td>Wrong logic</td><td>2</td><td>Code runs but produces incorrect results</td></tr>
+  </table>
+  <p style="color:var(--muted);font-size:0.85rem;margin-top:0.8rem">
+    All 27 tasks produced patches that applied cleanly — failures are entirely about code correctness.
+    Agent never ran tests during its session — the #1 improvement opportunity.
+    7 tasks passed >60% of tests, suggesting test-driven iteration would push them over the line.
+    2 CUDA tasks are structurally unsolvable in the eval environment.
   </p>
 </div>
 
@@ -86,6 +104,14 @@
     <div>
       <div class="title">02c — API Crash Retry (FeatureBench wrapper)</div>
       <div class="desc">Retry logic in <code>gemini_cli_local.py</code>: 3 retries with exponential backoff for zero-token API crashes. Smart detection distinguishes API crashes from real failures. Addresses 6/141 API failures.</div>
+    </div>
+    <span class="badge done">Done</span>
+  </a>
+
+  <a class="doc-card" href="#">
+    <div>
+      <div class="title">02d — Progressive Prompt Relaxation</div>
+      <div class="desc"><code>--attempt-number N</code> flag adjusts system prompt tone per attempt. Attempt 1: "best practices" guidance. Attempt 2: common failure patterns from experience. Attempt 3+: encourages fresh approach, warns against over-correcting. Uses experience-sharing tone throughout.</div>
     </div>
     <span class="badge done">Done</span>
   </a>

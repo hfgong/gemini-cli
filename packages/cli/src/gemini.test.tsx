@@ -501,6 +501,7 @@ describe('gemini.tsx main function kitty protocol', () => {
       protectTests: undefined,
       reproduceFirst: undefined,
       timeBudget: undefined,
+      attemptNumber: undefined,
       isCommand: undefined,
     });
 

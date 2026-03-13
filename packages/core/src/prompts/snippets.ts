@@ -40,6 +40,7 @@ export interface TestVerificationOptions {
   verifyBeforeComplete?: boolean;
   protectTests?: boolean;
   reproduceFirst?: boolean;
+  attemptNumber?: number;
 }
 
 export interface TimeBudgetOptions {
@@ -356,6 +357,7 @@ export function renderTestVerification(
 ): string {
   if (!options) return '';
 
+  const attempt = options.attemptNumber ?? 1;
   const sections: string[] = [];
 
   if (
@@ -367,40 +369,77 @@ export function renderTestVerification(
   }
 
   if (options.reproduceFirst) {
-    sections.push(`
+    if (attempt <= 1) {
+      sections.push(`
 ## Reproduce Before Fixing
-Before implementing any fix, you MUST first create a minimal reproduction script that demonstrates the bug or issue:
-1. Write a short script (e.g., \`reproduce_bug.py\` or \`test_reproduction.sh\`) that triggers the exact failure described in the task.
-2. Run the script to confirm it reproduces the issue. If it does not reproduce, re-read the problem description and adjust.
-3. Only after you have a working reproduction, proceed to implement the fix.
-4. After fixing, re-run your reproduction script to confirm the fix works.
-This reproduction script is your ground truth — it defines what "fixed" means.`);
+When practical, try to create a small reproduction script before jumping into the fix. This helps confirm you understand the problem:
+1. Write a short script (e.g., \`reproduce_bug.py\`) that triggers the failure.
+2. Run it to confirm it reproduces the issue.
+3. Implement your fix, then re-run the script to confirm the fix works.
+This is especially valuable for subtle bugs. For straightforward tasks where the fix is obvious, you may skip this.`);
+    } else {
+      // On retries, skip reproduction — the agent already understands the problem
+    }
   }
 
   if (options.verifyBeforeComplete) {
     sections.push(`
-## Mandatory Test Verification
-Before declaring your task complete, you MUST verify your changes by running tests:
-1. **Find relevant tests**: Look for test files related to your changes. Search for \`test_*.py\`, \`*_test.py\`, files in \`tests/\` or \`test/\` directories, or any test file that imports modules you modified.
-2. **Run the tests**: Execute the relevant test suite, e.g., \`python -m pytest path/to/test_file.py -x -q\` or the project-specific test command.
-3. **If tests fail**: Read the failure output carefully, fix your code, and re-run. Repeat until tests pass or you have exhausted 3 fix attempts.
-4. **Only then** consider your task complete.
-5. If you cannot find relevant tests, state this explicitly and explain how you verified correctness manually (e.g., by running the code with sample inputs).
-Do NOT skip this step. A change that has not been verified by running tests is not complete.
-If tests fail with import errors or missing dependencies, activate the \`setup-project\` skill to set up the development environment first.`);
+## Test Verification
+Before declaring your task complete, verify your changes work:
+1. **Find relevant tests**: Look for test files related to your changes (\`test_*.py\`, \`*_test.py\`, \`tests/\` directories).
+2. **Run the tests**: e.g., \`python -m pytest path/to/test_file.py -x -q\` or the project-specific test command.
+3. **If tests fail**: Read the failure output, fix your code, and re-run.
+4. If you cannot find relevant tests, verify correctness manually.
+If tests fail with import errors, activate the \`setup-project\` skill first.`);
   }
 
   if (options.protectTests) {
     sections.push(`
-## Prefer Fixing Source Code Over Modifying Tests
-When a test fails, your **default assumption** should be that the source code is wrong, not the test. Follow this decision process:
-1. First, try to fix the source code to make the failing test pass.
-2. Only modify a test if you have **high confidence** that the test expectation itself is incorrect (e.g., the test asserts outdated behavior that contradicts the task requirements, or the test has a clear typo/bug).
-3. If you do modify a test, you MUST explain **why the test was wrong** and why changing it is more correct than changing the source code.
-4. Never modify a test just to make it pass — that defeats the purpose of testing.`);
+## Source vs. Test Changes
+When a test fails, generally assume the source code needs fixing, not the test. Modify tests only if you're confident the test expectation itself is wrong (e.g., it asserts outdated behavior).`);
   }
 
+  // Code quality guidance — softened based on attempt number
+  sections.push(renderCodeQualityGuidance(attempt));
+
   return sections.join('\n');
+}
+
+function renderCodeQualityGuidance(attempt: number): string {
+  if (attempt >= 3) {
+    return `
+## Best Practices (Attempt ${attempt})
+This is attempt ${attempt} at this task. Earlier attempts did not produce a passing solution.
+
+A common pattern we've seen on later attempts: over-correcting based on what went wrong before — being too cautious where the previous attempt was too aggressive, or vice versa. The best later attempts come from stepping back and re-reading the task with fresh eyes, as if seeing it for the first time. Trust your own judgement over any patterns from earlier tries.
+
+If something fundamentally different needs to happen — a different algorithm, a different file, a different interpretation of the requirements — now is the time.`;
+  }
+
+  if (attempt === 2) {
+    return `
+## Best Practices (Attempt 2)
+This is the second attempt at this task. The first attempt produced a patch that did not pass all tests.
+
+From experience, the most common reasons first attempts fail:
+- **Rewriting too much**: Replacing an entire file when only a few functions needed adding. The existing code has callers that depend on its current interfaces — deleting or restructuring it breaks them.
+- **Breaking imports**: Editing a core module in a way that prevents the package from importing at all. A quick \`python -c "import package.module"\` after editing catches this early.
+- **Mismatched interfaces**: The task description specifies certain function signatures or class names, but the implementation uses different ones. Other code (including tests) depends on the exact names and signatures described.
+- **Testing against the wrong file**: Running a related but different test file and optimizing for it, when the actual evaluation uses a different test with different expectations.
+- **Looping on the same error**: Hitting the same failure 3+ times without trying a fundamentally different approach. When stuck, \`git checkout -- file\` and a fresh strategy often works better than another iteration.
+
+These are patterns, not rules — use your judgement about what applies to this specific task.`;
+  }
+
+  // First attempt: share experience as tips
+  return `
+## Best Practices
+A few things we've found help produce correct patches:
+- **Build on what's there**: When adding new functionality, prefer adding to existing files rather than rewriting them. The existing code likely has callers depending on its current interfaces and import paths.
+- **Check imports early**: After modifying a module, a quick \`python -c "import package.module"\` catches broken imports before they cascade through every test.
+- **Match what's specified**: If the task describes specific function signatures, class names, or return formats, match them exactly — other code depends on these interfaces being precise.
+- **Change course when stuck**: If you hit the same error 3+ times, it's often faster to revert with \`git checkout -- file\` and try a different approach than to keep iterating on a broken path.
+- **Test what you changed**: Run tests that exercise the code you modified. If the most relevant test file isn't available, use the interface descriptions in the task to guide your implementation.`;
 }
 
 export function renderTimeBudget(options?: TimeBudgetOptions): string {

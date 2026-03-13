@@ -96,6 +96,7 @@ export interface CliArgs {
   protectTests: boolean | undefined;
   reproduceFirst: boolean | undefined;
   timeBudget: number | undefined;
+  attemptNumber: number | undefined;
   isCommand: boolean | undefined;
 }
 
@@ -316,6 +317,12 @@ export async function parseArguments(
           type: 'number',
           description:
             'Time budget in minutes. The agent will be informed of this deadline to help it plan efficiently.',
+        })
+        .option('attempt-number', {
+          type: 'number',
+          description:
+            'Current attempt number (1=first try). Higher attempts progressively relax constraints to encourage different approaches.',
+          default: 1,
         }),
     )
     // Register MCP subcommands
@@ -858,6 +865,7 @@ export async function loadCliConfig(
     protectTests: argv.protectTests,
     reproduceFirst: argv.reproduceFirst,
     timeBudgetMinutes: argv.timeBudget,
+    attemptNumber: argv.attemptNumber,
   });
 }
 
