@@ -1,10 +1,69 @@
+# Gemini CLI (Agentic Coding Performance Fork)
+
+> Fork of
+> [google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli)
+> focused on improving performance on agentic coding benchmarks
+> ([FeatureBench](https://github.com/google/FeatureBench),
+> [SWE-bench](https://www.swebench.com/)).
+
+## Benchmark Results
+
+### FeatureBench (lite split, gemini-3.1-pro-preview)
+
+| Metric            | Upstream (v0.33.1) | This Fork (v0.34.0) |
+| ----------------- | ------------------ | ------------------- |
+| Resolved rate     | 10%                | **18.5%**           |
+| Avg F2P pass rate | 43.4%              | **50.3%**           |
+
+### What Changed
+
+**Phase 1 — Prompt & Context Tuning**
+
+- Lower compression threshold (0.5 &rarr; 0.75) to preserve more context
+- Directive/inquiry bias, proactiveness, and self-sufficiency prompt tuning
+- Smart file truncation: extracts class/function outlines with line numbers for
+  large files
+
+**Phase 2 — Structural Agent Improvements**
+
+- `--verify-before-complete` — completion gate that pushes the agent to run
+  tests before declaring done
+- `--protect-tests` — guide the agent to fix source code, not tests
+- `--reproduce-first` — encourage writing a reproduction script before patching
+- `--time-budget N` — inject time-management guidance into the system prompt
+- `--attempt-number N` — progressive prompt relaxation across retries
+  (best-practices tone on attempt 1, failure-pattern awareness on attempt 2,
+  fresh-start encouragement on attempt 3+)
+- API crash retry logic (FeatureBench wrapper): 3 retries with exponential
+  backoff for zero-token crashes
+
+**Design Documents**: [`docs/design/00-index.html`](docs/design/00-index.html)
+
+### Failure Analysis (22/27 unresolved)
+
+| Pattern                    | Count | Note                                                      |
+| -------------------------- | ----- | --------------------------------------------------------- |
+| Incomplete implementation  | 8     | Partial fix, missed edge cases (many at 60-90% pass rate) |
+| Missing import / NameError | 4     | Trivially caught by running tests                         |
+| Wrong API / type mismatch  | 4     | Wrong types, constructor args                             |
+| Broken module              | 2     | Changes broke existing code                               |
+| CUDA incompatibility       | 2     | Eval environment issue, not agent                         |
+| Wrong logic                | 2     | Code runs but wrong results                               |
+
+Top opportunity: the agent rarely runs tests during its session. 7 tasks
+passed >60% of tests — test-driven iteration would likely resolve them.
+
+---
+
+_The original README follows below. For upstream documentation, see
+[google-gemini/gemini-cli](https://github.com/google-gemini/gemini-cli)._
+
+---
+
 # Gemini CLI
 
-[![Gemini CLI CI](https://github.com/google-gemini/gemini-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/google-gemini/gemini-cli/actions/workflows/ci.yml)
-[![Gemini CLI E2E (Chained)](https://github.com/google-gemini/gemini-cli/actions/workflows/chained_e2e.yml/badge.svg)](https://github.com/google-gemini/gemini-cli/actions/workflows/chained_e2e.yml)
 [![Version](https://img.shields.io/npm/v/@google/gemini-cli)](https://www.npmjs.com/package/@google/gemini-cli)
 [![License](https://img.shields.io/github/license/google-gemini/gemini-cli)](https://github.com/google-gemini/gemini-cli/blob/main/LICENSE)
-[![View Code Wiki](https://assets.codewiki.google/readme-badge/static.svg)](https://codewiki.google/github.com/google-gemini/gemini-cli?utm_source=badge&utm_medium=github&utm_campaign=github.com/google-gemini/gemini-cli)
 
 ![Gemini CLI Screenshot](./docs/assets/gemini-screenshot.png)
 
